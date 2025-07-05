@@ -1,0 +1,192 @@
+# ArXiv RAG System - Git Ignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyCharm
+.idea/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.tmp
+*.temp
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# RAG System Specific Files
+# =========================
+
+# Data directories (contains processed documents, embeddings, etc.)
+data/
+!data/.gitkeep
+
+# Document storage
+documents/
+sample_documents/*.pdf
+temp_uploads/
+
+# Vector embeddings and indices
+embeddings/
+*.npy
+*.faiss
+index/
+vector_index/
+
+# Logs
+logs/
+*.log
+
+# Cache directories
+cache/
+.cache/
+__pycache__/
+
+# Model files and weights
+models/
+*.bin
+*.safetensors
+*.ckpt
+*.pth
+*.pt
+
+# Marker specific cache
+.marker_cache/
+
+# Hugging Face cache
+.cache/huggingface/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+env_example.txt
+
+# Configuration files with secrets
+config.local.py
+secrets.json
+api_keys.txt
+
+# Temporary processing files
+temp/
+tmp/
+*.tmp
+
+# Large data files
+*.pkl
+*.pickle
+*.joblib
+
+# Streamlit cache
+.streamlit/
+
+# MLflow tracking
+mlruns/
+
+# Weights & Biases
+wandb/
+
+# DVC
+.dvc/
+*.dvc
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Keep empty directories with .gitkeep files
+!.gitkeep
+
+# Keep essential config and documentation
+!README.md
+!requirements.txt
+!setup.py
+!*.md
+!LICENSE 
