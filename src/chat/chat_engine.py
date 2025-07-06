@@ -31,7 +31,12 @@ class ChatEngine:
         self.source_tracker = SourceTracker()
         
         # Re-register existing documents with source tracker
-        self.vector_store.re_register_existing_documents(self.source_tracker)
+        try:
+            registered_count = self.vector_store.re_register_existing_documents(self.source_tracker)
+            if registered_count > 0:
+                self.logger.info(f"Re-registered {registered_count} existing documents")
+        except Exception as e:
+            self.logger.warning(f"Failed to re-register existing documents: {e}")
         
         # Conversation state
         self.conversation_history = []

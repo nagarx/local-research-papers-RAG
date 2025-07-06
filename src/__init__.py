@@ -39,11 +39,10 @@ from .llm import OllamaClient
 from .tracking import SourceTracker
 from .chat import ChatEngine
 
-# New modular components
-from .config import BaseComponent, BaseStats, AsyncComponentMixin, CacheManager, ErrorHandler, ValidationMixin
+# Base components
+from .config import BaseStats
 from .utils import (
-    FileUtils, GPUUtils, TextUtils, AsyncUtils, EmbeddingUtils, 
-    HashUtils, PerformanceUtils, LoggerUtils,
+    FileUtils, GPUUtils,
     ensure_directory, clear_gpu_cache, clean_text, get_text_hash, run_in_thread
 )
 from .config import (
@@ -59,15 +58,12 @@ def get_version():
     return __version__
 
 def get_system_info():
-    """Get system information for debugging"""
-    import sys
-    import platform
-    
+    """Get system information"""
     return {
         "version": __version__,
-        "python_version": sys.version,
-        "platform": platform.platform(),
-        "architecture": platform.architecture(),
+        "author": __author__,
+        "license": __license__,
+        "python_version": f"{VERSION_INFO[0]}.{VERSION_INFO[1]}.{VERSION_INFO[2]}"
     }
 
 # Default configuration
@@ -87,10 +83,9 @@ __all__ = [
     "SourceTracker",
     "ChatEngine",
     # Base components
-    "BaseComponent", "BaseStats", "AsyncComponentMixin", "CacheManager", "ErrorHandler", "ValidationMixin",
+    "BaseStats",
     # Utilities
-    "FileUtils", "GPUUtils", "TextUtils", "AsyncUtils", "EmbeddingUtils", 
-    "HashUtils", "PerformanceUtils", "LoggerUtils",
+    "FileUtils", "GPUUtils",
     "ensure_directory", "clear_gpu_cache", "clean_text", "get_text_hash", "run_in_thread",
     # Exceptions
     "RAGSystemError", "ConfigurationError", "ModelLoadError", "DocumentProcessingError",
