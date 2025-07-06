@@ -189,4 +189,11 @@ wandb/
 !requirements.txt
 !setup.py
 !*.md
-!LICENSE 
+!LICENSE
+
+# Vector storage and databases
+*.faiss
+*.db
+*.sqlite*
+chroma/
+*.chroma 

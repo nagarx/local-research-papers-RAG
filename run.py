@@ -76,7 +76,7 @@ def check_dependencies():
         "marker",
         "ollama", 
         "sentence_transformers",
-        "faiss"
+        "chromadb"
     ]
     
     missing_packages = []

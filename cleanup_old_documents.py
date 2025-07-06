@@ -10,39 +10,60 @@ import argparse
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
+import asyncio
+from typing import Dict, Any
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from src.storage import VectorStore
+from src.storage import ChromaVectorStore
 from src.tracking import SourceTracker
 from src.config import get_config, get_logger
 
 
-class DocumentCleanup:
-    """Handles cleanup and maintenance of RAG system documents"""
+class DocumentCleanupManager:
+    """Manages cleanup of old documents"""
     
     def __init__(self):
+        """Initialize the cleanup manager"""
         self.config = get_config()
         self.logger = get_logger(__name__)
-        self.vector_store = VectorStore()
+        self.vector_store = ChromaVectorStore()
         self.source_tracker = SourceTracker()
         
-    def cleanup_old_documents(self, days_old: int = 7) -> dict:
-        """Remove documents older than specified days"""
-        
-        self.logger.info(f"Starting cleanup of documents older than {days_old} days...")
-        
-        # Use the vector store's cleanup method
-        result = self.vector_store.cleanup_old_documents(days_old)
-        
-        # Log results
-        if result.get("removed_documents", 0) > 0:
-            self.logger.info(f"Cleanup completed: removed {result['removed_documents']} documents")
-        else:
-            self.logger.info("No old documents found to remove")
+    async def cleanup_old_documents(self, days_old: int = 7) -> Dict[str, Any]:
+        """Clean up documents older than specified days"""
+        try:
+            self.logger.info(f"Starting cleanup of documents older than {days_old} days")
             
-        return result
+            # Initialize vector store
+            await self.vector_store.initialize()
+            
+            # Get initial stats
+            initial_stats = self.vector_store.get_stats()
+            self.logger.info(f"Initial stats: {initial_stats}")
+            
+            # Perform cleanup
+            cleanup_result = self.vector_store.cleanup_old_documents(days_old)
+            
+            # Get final stats
+            final_stats = self.vector_store.get_stats()
+            self.logger.info(f"Final stats: {final_stats}")
+            
+            # Return comprehensive result
+            return {
+                "cleanup_result": cleanup_result,
+                "initial_stats": initial_stats,
+                "final_stats": final_stats,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}")
+            return {
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
     
     def fix_registry_issues(self) -> dict:
         """Fix document registry mismatches"""
@@ -138,83 +159,43 @@ class DocumentCleanup:
         print("\n" + "="*60)
 
 
-def main():
-    """Main function"""
-    
-    parser = argparse.ArgumentParser(
-        description="RAG System Document Cleanup and Maintenance Tool"
-    )
-    
+async def main():
+    """Main cleanup function"""
+    parser = argparse.ArgumentParser(description="Clean up old documents from vector store")
     parser.add_argument(
-        "--cleanup",
-        type=int,
-        metavar="DAYS",
-        help="Remove documents older than DAYS (default: 7)"
+        "--days", 
+        type=int, 
+        default=7,
+        help="Remove documents older than this many days (default: 7)"
     )
-    
     parser.add_argument(
-        "--fix-registry",
+        "--dry-run",
         action="store_true",
-        help="Fix document registry mismatches"
-    )
-    
-    parser.add_argument(
-        "--status",
-        action="store_true",
-        help="Show system status report"
-    )
-    
-    parser.add_argument(
-        "--full-maintenance",
-        action="store_true", 
-        help="Run full maintenance (cleanup + fix registry + status)"
+        help="Show what would be removed without actually removing it"
     )
     
     args = parser.parse_args()
     
-    # Default to status if no arguments
-    if not any([args.cleanup, args.fix_registry, args.status, args.full_maintenance]):
-        args.status = True
+    cleanup_manager = DocumentCleanupManager()
     
-    try:
-        cleanup = DocumentCleanup()
-        
-        # Full maintenance mode
-        if args.full_maintenance:
-            print("🔧 Running full system maintenance...")
-            
-            # Fix registry issues first
-            registry_result = cleanup.fix_registry_issues()
-            print(f"✅ Registry fix: {registry_result['re_registered_documents']} documents")
-            
-            # Clean up old documents (default 7 days)
-            cleanup_result = cleanup.cleanup_old_documents(7)
-            print(f"✅ Cleanup: {cleanup_result['removed_documents']} documents removed")
-            
-            # Show final status
-            status = cleanup.get_system_status()
-            cleanup.print_status_report(status)
-            
-            return
-        
-        # Individual operations
-        if args.fix_registry:
-            result = cleanup.fix_registry_issues()
-            print(f"✅ Fixed registry for {result['re_registered_documents']} documents")
-        
-        if args.cleanup is not None:
-            days = args.cleanup if args.cleanup > 0 else 7
-            result = cleanup.cleanup_old_documents(days)
-            print(f"✅ Removed {result['removed_documents']} documents older than {days} days")
-        
-        if args.status:
-            status = cleanup.get_system_status()
-            cleanup.print_status_report(status)
+    if args.dry_run:
+        print(f"DRY RUN: Would remove documents older than {args.days} days")
+        # TODO: Implement dry run functionality
+        return
     
-    except Exception as e:
-        print(f"❌ Error during cleanup: {e}")
-        sys.exit(1)
+    print(f"Cleaning up documents older than {args.days} days...")
+    result = await cleanup_manager.cleanup_old_documents(args.days)
+    
+    if "error" in result:
+        print(f"Error during cleanup: {result['error']}")
+        return
+    
+    cleanup_result = result["cleanup_result"]
+    print(f"Cleanup completed:")
+    print(f"  - Documents removed: {cleanup_result['removed_documents']}")
+    print(f"  - Documents remaining: {cleanup_result['remaining_documents']}")
+    print(f"  - Cutoff date: {cleanup_result['cutoff_date']}")
 
 
 if __name__ == "__main__":
-    main() 
+    asyncio.run(main()) 

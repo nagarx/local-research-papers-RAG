@@ -1,402 +1,222 @@
 """
-Chat Engine - RAG System Orchestrator
+Chat Engine - Handles RAG-based conversations with documents
+
+This module provides a conversational interface for querying processed documents.
 """
 
 import asyncio
-import time
-from typing import Dict, Any, List, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
 from ..config import get_config, get_logger
-from ..ingestion import DocumentProcessor
-from ..embeddings import EmbeddingManager
-from ..storage import VectorStore
+from ..storage import ChromaVectorStore
 from ..llm import OllamaClient
-from ..tracking import SourceTracker, SourceReference
+from ..core.interfaces.embedding_provider import EmbeddingProvider
+from ..core.interfaces.chat_engine import ChatEngineProtocol
 
 
-class ChatEngine:
-    """Complete RAG system orchestrating document processing, embedding, and chat"""
+class ChatEngine(ChatEngineProtocol):
+    """Main chat engine for RAG conversations"""
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """Initialize the chat engine"""
         self.config = get_config()
         self.logger = get_logger(__name__)
         
-        # Initialize core components
-        self.document_processor = DocumentProcessor()
-        self.embedding_manager = EmbeddingManager()
-        self.vector_store = VectorStore()
-        self.ollama_client = OllamaClient()
-        self.source_tracker = SourceTracker()
+        # Initialize components
+        self.vector_store = ChromaVectorStore()
+        self.llm_client = OllamaClient()
+        self.embedding_provider = None  # Will be set when needed
         
-        # Re-register existing documents with source tracker
-        self.vector_store.re_register_existing_documents(self.source_tracker)
-        
-        # Conversation state
+        # Chat state
         self.conversation_history = []
-        self.max_history_length = 10
+        self.current_context = []
         
         self.logger.info("ChatEngine initialized successfully")
     
-    async def add_documents_async(
-        self, 
-        file_paths: List[str],
-        progress_callback: Optional[callable] = None
-    ) -> Dict[str, Any]:
-        """Add multiple documents to the RAG system"""
-        
-        start_time = time.time()
-        
+    async def initialize(self):
+        """Initialize all components"""
         try:
-            self.logger.info(f"Processing {len(file_paths)} documents...")
+            # Initialize vector store
+            await self.vector_store.initialize()
             
-            # Process documents with Marker
-            if progress_callback:
-                progress_callback("Processing documents with Marker...", 0, len(file_paths))
+            # Initialize LLM client
+            await self.llm_client.initialize()
             
-            processed_docs = []
-            for i, file_path in enumerate(file_paths):
-                try:
-                    if progress_callback:
-                        progress_callback(f"Processing {file_path}...", i + 1, len(file_paths))
-                    
-                    processed_doc = await self.document_processor.process_document_async(file_path)
-                    processed_docs.append(processed_doc)
-                except Exception as e:
-                    self.logger.error(f"Failed to process {file_path}: {e}")
-                    continue
+            # Initialize embedding provider if needed
+            if self.embedding_provider:
+                await self.embedding_provider.initialize()
             
-            if not processed_docs:
-                return {
-                    "success": False,
-                    "error": "No documents were successfully processed",
-                    "total_documents": 0,
-                    "processing_time": time.time() - start_time
-                }
-            
-            total_chunks = 0
-            successful_docs = 0
-            
-            # Process each document
-            for doc_idx, processed_doc in enumerate(processed_docs):
-                try:
-                    if progress_callback:
-                        progress_callback(
-                            f"Embedding document {doc_idx + 1}/{len(processed_docs)}...", 
-                            doc_idx, 
-                            len(processed_docs)
-                        )
-                    
-                    # Extract text chunks
-                    chunks = processed_doc["content"]["blocks"]
-                    chunk_texts = [chunk["text"] for chunk in chunks if chunk["text"].strip()]
-                    
-                    if not chunk_texts:
-                        self.logger.warning(f"No text chunks found in {processed_doc['filename']}")
-                        continue
-                    
-                    # Generate embeddings for chunks
-                    embeddings = await self.embedding_manager.embed_texts_batch_async(chunk_texts)
-                    
-                    # Add to vector store
-                    success = self.vector_store.add_document(
-                        document_id=processed_doc["id"],
-                        chunks=chunks,
-                        embeddings=embeddings,
-                        metadata=processed_doc
-                    )
-                    
-                    if success:
-                        # Register with source tracker
-                        self.source_tracker.register_document(
-                            processed_doc["id"],
-                            processed_doc["source_path"],
-                            processed_doc
-                        )
-                        
-                        successful_docs += 1
-                        total_chunks += len(chunks)
-                        
-                        self.logger.info(f"Successfully added {processed_doc['filename']} with {len(chunks)} chunks")
-                    else:
-                        self.logger.error(f"Failed to add {processed_doc['filename']} to vector store")
-                
-                except Exception as e:
-                    self.logger.error(f"Error processing document {processed_doc.get('filename', 'unknown')}: {e}")
-                    continue
-            
-            processing_time = time.time() - start_time
-            
-            result = {
-                "success": True,
-                "total_documents": successful_docs,
-                "total_chunks": total_chunks,
-                "processing_time": processing_time,
-                "failed_documents": len(file_paths) - successful_docs,
-                "message": f"Successfully processed {successful_docs} documents with {total_chunks} chunks"
-            }
-            
-            if progress_callback:
-                progress_callback("Processing complete!", len(file_paths), len(file_paths))
-            
-            self.logger.info(f"Document processing completed in {processing_time:.2f}s")
-            return result
+            self.logger.info("ChatEngine components initialized successfully")
             
         except Exception as e:
-            self.logger.error(f"Error in add_documents_async: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "total_documents": 0,
-                "processing_time": time.time() - start_time
-            }
+            self.logger.error(f"Failed to initialize ChatEngine: {e}")
+            raise
     
-    async def query_async(
+    async def process_query(
         self, 
-        user_query: str,
-        top_k: int = None,
+        query: str, 
+        top_k: int = 5,
         similarity_threshold: float = None,
-        include_conversation_history: bool = True
+        document_filters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Process a user query and generate a response"""
-        
-        start_time = time.time()
-        
+        """Process a user query and return response with sources"""
         try:
-            if top_k is None:
-                top_k = self.config.ui.default_query_limit
-            
-            if similarity_threshold is None:
-                similarity_threshold = self.config.vector_storage.similarity_threshold
-            
-            self.logger.info(f"Processing query: {user_query[:100]}...")
-            
             # Generate query embedding
-            query_embedding = await self.embedding_manager.embed_text_async(user_query)
+            if not self.embedding_provider:
+                # Load embedding provider on demand
+                from sentence_transformers import SentenceTransformer
+                model = SentenceTransformer(self.config.embedding.model)
+                query_embedding = model.encode([query])[0]
+            else:
+                query_embedding = await self.embedding_provider.embed_query(query)
             
-            # Search for relevant chunks
-            search_results = self.vector_store.search(
-                query_embedding,
+            # Search vector store
+            search_results = await self.vector_store.search(
+                query_embedding=query_embedding,
                 top_k=top_k,
-                similarity_threshold=similarity_threshold
+                similarity_threshold=similarity_threshold,
+                filters=document_filters
             )
             
-            if not search_results:
-                return {
-                    "response": "I couldn't find any relevant information in the uploaded documents to answer your question.",
-                    "sources": [],
-                    "query": user_query,
-                    "metadata": {
-                        "total_sources": 0,
-                        "response_time": time.time() - start_time,
-                        "timestamp": datetime.utcnow().isoformat()
-                    }
-                }
-            
-            # Prepare context chunks for LLM
+            # Prepare context for LLM
             context_chunks = []
-            source_references = []
+            sources = []
             
-            for chunk_id, similarity, chunk_metadata in search_results:
-                context_chunks.append(chunk_metadata)
-                
-                # Create source reference
-                source_ref = self.source_tracker.create_source_reference(
-                    document_id=chunk_metadata["document_id"],
-                    page_number=chunk_metadata["page_number"],
-                    block_index=chunk_metadata["chunk_index"],
-                    block_type=chunk_metadata["block_type"],
-                    text_snippet=chunk_metadata["text"][:200],
-                    confidence_score=similarity
+            for result in search_results:
+                context_chunks.append(result.metadata.get("text", ""))
+                sources.append({
+                    "document_id": result.metadata.get("document_id", ""),
+                    "filename": result.metadata.get("filename", ""),
+                    "page_number": result.metadata.get("page_number", 1),
+                    "chunk_id": result.chunk_id,
+                    "similarity": result.similarity
+                })
+            
+            # Generate response using LLM
+            if context_chunks:
+                context = "\n\n".join(context_chunks)
+                response = await self.llm_client.generate_response(
+                    query=query,
+                    context=context,
+                    conversation_history=self.conversation_history[-5:]  # Last 5 exchanges
                 )
-                source_references.append(source_ref)
-            
-            # Prepare conversation history
-            history = None
-            if include_conversation_history and self.conversation_history:
-                history = self.conversation_history[-self.max_history_length:]
-            
-            # Generate LLM response
-            llm_response = await self.ollama_client.generate_response_async(
-                user_query=user_query,
-                context_chunks=context_chunks,
-                conversation_history=history
-            )
-            
-            # Format sources
-            formatted_sources = self._format_sources(source_references)
+            else:
+                response = "I couldn't find relevant information in the uploaded documents to answer your question."
             
             # Update conversation history
-            if include_conversation_history:
-                self.conversation_history.append({
-                    "role": "user",
-                    "content": user_query
-                })
-                self.conversation_history.append({
-                    "role": "assistant", 
-                    "content": llm_response["response"]
-                })
-                
-                # Trim history if too long
-                if len(self.conversation_history) > self.max_history_length * 2:
-                    self.conversation_history = self.conversation_history[-self.max_history_length * 2:]
+            self.conversation_history.append({
+                "timestamp": datetime.utcnow().isoformat(),
+                "query": query,
+                "response": response,
+                "sources": sources
+            })
             
-            # Calculate total response time
-            total_response_time = time.time() - start_time
-            
-            # Prepare final response
-            response_data = {
-                "response": llm_response["response"],
-                "sources": formatted_sources,
-                "query": user_query,
-                "context_chunks": context_chunks,
-                "metadata": {
-                    "total_sources": len(search_results),
-                    "response_time": total_response_time,
-                    "llm_response_time": llm_response["metadata"]["response_time"],
-                    "similarity_scores": [score for _, score, _ in search_results],
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "model_used": llm_response["model"]
-                }
+            return {
+                "response": response,
+                "sources": sources,
+                "context_used": len(context_chunks),
+                "timestamp": datetime.utcnow().isoformat()
             }
-            
-            # Add error information if present
-            if llm_response.get("error"):
-                response_data["error"] = llm_response["error"]
-                response_data["error_message"] = llm_response.get("error_message")
-            
-            self.logger.info(f"Query processed successfully in {total_response_time:.2f}s")
-            return response_data
             
         except Exception as e:
             self.logger.error(f"Error processing query: {e}")
-            
             return {
-                "response": f"I apologize, but I encountered an error while processing your question: {str(e)}",
+                "response": f"I encountered an error while processing your query: {str(e)}",
                 "sources": [],
-                "query": user_query,
-                "error": True,
-                "error_message": str(e),
-                "metadata": {
-                    "total_sources": 0,
-                    "response_time": time.time() - start_time,
-                    "timestamp": datetime.utcnow().isoformat()
-                }
+                "context_used": 0,
+                "timestamp": datetime.utcnow().isoformat(),
+                "error": str(e)
             }
     
-    def _format_sources(self, source_references: List[SourceReference]) -> List[Dict[str, Any]]:
-        """Format source references for display"""
-        
-        formatted_sources = []
-        
-        for source_ref in source_references:
-            formatted_source = {
-                "document_name": source_ref.document_name,
-                "page_number": source_ref.page_number,
-                "block_type": source_ref.block_type,
-                "confidence_score": round(source_ref.confidence_score, 3),
-                "text_snippet": source_ref.text_snippet,
-                "citation": self.source_tracker.format_citation(source_ref, style="simple")
-            }
-            formatted_sources.append(formatted_source)
-        
-        return formatted_sources
-    
-    def get_conversation_history(self) -> List[Dict[str, str]]:
-        """Get current conversation history"""
+    async def get_conversation_history(self) -> List[Dict[str, Any]]:
+        """Get the conversation history"""
         return self.conversation_history.copy()
     
-    def clear_conversation_history(self):
-        """Clear conversation history"""
-        self.conversation_history = []
+    async def clear_conversation_history(self):
+        """Clear the conversation history"""
+        self.conversation_history.clear()
+        self.current_context.clear()
         self.logger.info("Conversation history cleared")
     
-    def list_documents(self) -> List[Dict[str, Any]]:
-        """List all documents in the system"""
-        return self.vector_store.list_documents()
-    
-    def get_document_info(self, document_id: str) -> Optional[Dict[str, Any]]:
-        """Get detailed information about a specific document"""
-        return self.vector_store.get_document_info(document_id)
-    
-    async def test_system_health(self) -> Dict[str, Any]:
-        """Test system health and component connectivity"""
-        
-        health_status = {
-            "overall_status": "healthy",
-            "components": {},
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-        # Test Ollama connection
-        ollama_connected = self.ollama_client.test_connection()
-        health_status["components"]["ollama"] = {
-            "status": "healthy" if ollama_connected else "unhealthy",
-            "connected": ollama_connected,
-            "model": self.config.ollama.model,
-            "base_url": self.config.ollama.base_url
-        }
-        
-        # Test embedding model
+    async def get_document_stats(self) -> Dict[str, Any]:
+        """Get statistics about available documents"""
         try:
-            test_embedding = await self.embedding_manager.embed_text_async("test")
-            embedding_healthy = test_embedding is not None and len(test_embedding) > 0
+            return self.vector_store.get_stats()
         except Exception as e:
-            embedding_healthy = False
-            health_status["components"]["embedding_error"] = str(e)
-        
-        health_status["components"]["embedding_manager"] = {
-            "status": "healthy" if embedding_healthy else "unhealthy",
-            "model": self.config.embedding.model,
-            "device": self.embedding_manager.device
-        }
-        
-        # Test vector store
-        vector_store_healthy = True
-        try:
-            stats = self.vector_store.get_stats()
-            vector_store_healthy = isinstance(stats, dict)
-        except Exception:
-            vector_store_healthy = False
-        
-        health_status["components"]["vector_store"] = {
-            "status": "healthy" if vector_store_healthy else "unhealthy",
-            "total_documents": len(self.vector_store.list_documents()) if vector_store_healthy else 0
-        }
-        
-        # Overall health
-        component_statuses = [
-            comp["status"] for comp in health_status["components"].values()
-            if isinstance(comp, dict) and "status" in comp
-        ]
-        
-        if all(status == "healthy" for status in component_statuses):
-            health_status["overall_status"] = "healthy"
-        elif any(status == "healthy" for status in component_statuses):
-            health_status["overall_status"] = "degraded"
-        else:
-            health_status["overall_status"] = "unhealthy"
-        
-        return health_status
+            self.logger.error(f"Error getting document stats: {e}")
+            return {"error": str(e)}
     
-    def get_system_stats(self) -> Dict[str, Any]:
-        """Get comprehensive system statistics"""
-        
-        stats = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "chat_engine": {
-                "total_queries": len([msg for msg in self.conversation_history if msg["role"] == "user"]),
-                "successful_queries": len([msg for msg in self.conversation_history if msg["role"] == "assistant"]),
-                "conversation_length": len(self.conversation_history)
-            },
-            "document_processor": self.document_processor.get_processing_stats(),
-            "embedding_manager": self.embedding_manager.get_stats(),
-            "vector_store": self.vector_store.get_stats(),
-            "ollama_client": {
-                "model": self.config.ollama.model,
-                "base_url": self.config.ollama.base_url
+    async def list_documents(self) -> List[Dict[str, Any]]:
+        """List all available documents"""
+        try:
+            return await self.vector_store.list_documents()
+        except Exception as e:
+            self.logger.error(f"Error listing documents: {e}")
+            return []
+    
+    async def get_document_info(self, document_id: str) -> Optional[Dict[str, Any]]:
+        """Get detailed information about a specific document"""
+        try:
+            return await self.vector_store.get_document(document_id)
+        except Exception as e:
+            self.logger.error(f"Error getting document info: {e}")
+            return None
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """Perform a health check on all components"""
+        try:
+            health_status = {
+                "vector_store": "unknown",
+                "llm_client": "unknown",
+                "embedding_provider": "unknown",
+                "overall": "unknown",
+                "timestamp": datetime.utcnow().isoformat()
             }
-        }
-        
-        return stats
+            
+            # Check vector store
+            try:
+                stats = self.vector_store.get_stats()
+                health_status["vector_store"] = "healthy" if stats else "error"
+            except Exception as e:
+                health_status["vector_store"] = f"error: {str(e)}"
+            
+            # Check LLM client
+            try:
+                llm_status = await self.llm_client.health_check()
+                health_status["llm_client"] = "healthy" if llm_status.get("status") == "ok" else "error"
+            except Exception as e:
+                health_status["llm_client"] = f"error: {str(e)}"
+            
+            # Check embedding provider
+            if self.embedding_provider:
+                try:
+                    embedding_status = await self.embedding_provider.health_check()
+                    health_status["embedding_provider"] = "healthy" if embedding_status else "error"
+                except Exception as e:
+                    health_status["embedding_provider"] = f"error: {str(e)}"
+            else:
+                health_status["embedding_provider"] = "not_initialized"
+            
+            # Overall status
+            component_statuses = [
+                health_status["vector_store"],
+                health_status["llm_client"]
+            ]
+            
+            if all(status == "healthy" for status in component_statuses):
+                health_status["overall"] = "healthy"
+            elif any("error" in status for status in component_statuses):
+                health_status["overall"] = "error"
+            else:
+                health_status["overall"] = "partial"
+            
+            return health_status
+            
+        except Exception as e:
+            self.logger.error(f"Error during health check: {e}")
+            return {
+                "overall": "error",
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }

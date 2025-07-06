@@ -46,7 +46,7 @@ def main():
     - **Configuration Management** - Pydantic-based settings with environment variables
     - **Document Processor** - Marker integration for superior PDF processing  
     - **Embedding Manager** - SentenceTransformers with caching and batch processing
-    - **Vector Store** - JSON + FAISS hybrid storage for fast similarity search
+            - **Vector Store** - ChromaDB storage for fast similarity search
     - **Ollama Client** - Local LLM integration with async support
     - **Source Tracker** - Precise citation management with page numbers
     - **Chat Engine** - Complete RAG pipeline orchestration
@@ -133,7 +133,7 @@ def main():
         - **Backend:** Python 3.10+ with async/await
         - **Document Processing:** Marker + PyMuPDF
         - **Embeddings:** SentenceTransformers 
-        - **Vector Search:** FAISS + JSON metadata
+        - **Vector Search:** ChromaDB with integrated metadata
         - **LLM:** Ollama (local inference)
         - **UI:** Streamlit (this interface)
         """)

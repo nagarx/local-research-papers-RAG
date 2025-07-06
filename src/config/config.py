@@ -218,10 +218,10 @@ class StoragePathsConfig(BaseSettings):
         env="EMBEDDINGS_DIR",
         description="Embeddings storage directory"
     )
-    index_dir: Path = Field(
-        default=Path("./data/index"),
-        env="INDEX_DIR",
-        description="Vector index storage directory"
+    chroma_dir: Path = Field(
+        default=Path("./data/chroma"),
+        env="CHROMA_DIR",
+        description="ChromaDB vector storage directory"
     )
     cache_dir: Path = Field(
         default=Path("./data/cache"),
