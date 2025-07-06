@@ -1,9 +1,9 @@
 """
 Storage Module
 
-This module handles vector storage and retrieval using FAISS.
+This module handles vector storage and retrieval using ChromaDB.
 """
 
-from .vector_store import VectorStore
+from .chroma_vector_store import ChromaVectorStore
 
-__all__ = ['VectorStore']
+__all__ = ['ChromaVectorStore']
