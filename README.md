@@ -114,23 +114,6 @@ The system uses **ChromaDB** for efficient vector storage and retrieval:
 - **Metadata filtering**: Filter searches by document, page number, or other criteria
 - **Scalable**: Handles thousands of documents efficiently
 
-## Sample Papers Included
-
-The package includes 10+ carefully selected ArXiv research papers covering:
-- Neural Networks and Deep Learning
-- Transformer Architectures
-- Computer Vision Advances
-- Natural Language Processing
-- Machine Learning Theory
-- AI Ethics and Explainability
-
-## System Requirements
-
-- **Memory**: 8GB RAM minimum, 16GB recommended
-- **Storage**: 2GB free space for models and processing
-- **Network**: Required for initial Ollama model download
-- **OS**: Windows 10+, macOS 10.15+, or Linux
-
 ## Troubleshooting
 
 ### Quick Fixes

@@ -109,8 +109,6 @@ data/
 
 # Document storage and uploads
 documents/
-sample_documents/*.pdf
-temp_uploads/
 
 # Vector embeddings and ChromaDB storage
 embeddings/
