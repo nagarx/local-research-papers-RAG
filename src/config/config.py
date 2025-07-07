@@ -58,7 +58,7 @@ class EmbeddingConfig(BaseSettings):
     """Embedding model configuration"""
     
     model: str = Field(
-        default="all-MiniLM-L6-v2",
+        default="BAAI/bge-large-en-v1.5",
         env="EMBEDDING_MODEL",
         description="SentenceTransformers model name"
     )
@@ -73,7 +73,7 @@ class EmbeddingConfig(BaseSettings):
         description="Device for embedding model (auto, cpu, cuda)"
     )
     dimension: int = Field(
-        default=384,
+        default=1024,
         env="VECTOR_DIMENSION",
         description="Embedding vector dimension"
     )

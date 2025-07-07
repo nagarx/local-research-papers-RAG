@@ -1611,25 +1611,20 @@ class StreamlitRAGApp:
         # Chat input section
         st.markdown("### 💬 Chat")
         
-        # Chat input
-        user_query = st.text_input(
-            "Ask a question about your selected documents:",
-            placeholder="What is the main contribution of this paper?",
-            key="chat_input"
+        # Clear chat button
+        if st.button("🗑️ Clear Chat", key="clear_chat"):
+            st.session_state.conversation_history = []
+            st.rerun()
+        
+        # Modern chat input with Enter key support
+        user_query = st.chat_input(
+            placeholder="Ask a question about your selected documents... (Press Enter to send)",
+            key="chat_input_modern"
         )
         
-        col1, col2 = st.columns([1, 4])
-        
-        with col1:
-            if st.button("📤 Send", key="send_query"):
-                if user_query.strip():
-                    # Pass selected document IDs to the chat query
-                    self.process_chat_query(user_query, st.session_state.selected_documents)
-        
-        with col2:
-            if st.button("🗑️ Clear Chat", key="clear_chat"):
-                st.session_state.conversation_history = []
-                st.rerun()
+        # Process query if user pressed Enter or sent via chat_input
+        if user_query and user_query.strip():
+            self.process_chat_query(user_query, st.session_state.selected_documents)
         
         # Display conversation history
         if st.session_state.conversation_history:
