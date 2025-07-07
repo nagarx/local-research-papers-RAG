@@ -1,16 +1,16 @@
 # ArXiv Paper RAG Assistant
 
-An intelligent RAG (Retrieval-Augmented Generation) system designed specifically for academic research papers. Upload multiple PDFs, process them with state-of-the-art document understanding, and chat with your documents using local LLMs.
+## Technical Overview
 
-## Features
+This system implements a comprehensive Retrieval-Augmented Generation (RAG) pipeline optimized for academic document analysis. The architecture employs a multi-stage processing framework that transforms unstructured PDF documents into queryable knowledge representations through advanced NLP techniques.
 
-- 🔄 **Batch PDF Processing**: Upload and process hundreds of PDFs simultaneously
-- 🧠 **Local LLM Integration**: Uses Ollama for private, offline AI processing
-- 📄 **Advanced Document Understanding**: Powered by Marker for superior text extraction
-- 🎯 **Precise Source Attribution**: Exact PDF and page number citations
-- 💬 **Interactive Chat Interface**: Streamlit-based user-friendly interface
-- 📚 **Persistent Storage**: ChromaDB-based vector storage for efficient retrieval
-- 🔍 **Semantic Search**: Intelligent context retrieval for accurate answers
+**Document Processing Pipeline**: PDF documents undergo extraction using Marker, a state-of-the-art document understanding model that preserves semantic structure, mathematical notation, and citation relationships. The system performs intelligent chunking with overlapping windows to maintain contextual coherence across section boundaries.
+
+**Embedding & Vectorization**: Text chunks are encoded using sentence-transformers models to generate high-dimensional semantic embeddings. These representations capture both syntactic and semantic properties essential for academic content retrieval.
+
+**Vector Storage & Retrieval**: ChromaDB serves as the persistent vector database, implementing approximate nearest neighbor search with cosine similarity metrics. The system maintains document metadata including source attribution, page numbers, and hierarchical section information for precise provenance tracking.
+
+**Generation Framework**: Query processing utilizes a local Ollama-based language model (LLaMA 3.2) for privacy-preserving inference. The retrieval mechanism employs semantic similarity scoring to select relevant context windows, which are then provided to the LLM for contextualized response generation with citation support.
 
 ## Quick Start
 
