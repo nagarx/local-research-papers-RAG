@@ -1,0 +1,115 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 3.9%;
+    --border: 0 0% 89.8%;
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 0 0% 96.1%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 0 0% 3.9%;
+    --foreground: 0 0% 98%;
+    --border: 0 0% 14.9%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 9%;
+    --secondary: 0 0% 14.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 14.9%;
+    --muted-foreground: 0 0% 63.9%;
+    --accent: 0 0% 14.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-border rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-muted-foreground;
+}
+
+/* Panel resize handle styles */
+[data-panel-resize-handle-enabled] {
+  @apply relative flex w-px items-center justify-center bg-border;
+  @apply after:absolute after:inset-y-0 after:left-1/2 after:w-1 after:-translate-x-1/2;
+  @apply hover:bg-primary/20 active:bg-primary/30;
+  @apply transition-colors duration-200;
+}
+
+[data-panel-resize-handle-enabled]:hover {
+  @apply cursor-col-resize;
+}
+
+[data-panel-resize-handle-enabled="horizontal"] {
+  @apply h-px w-full;
+  @apply after:left-0 after:h-1 after:w-full after:translate-x-0 after:-translate-y-1/2;
+}
+
+[data-panel-resize-handle-enabled="horizontal"]:hover {
+  @apply cursor-row-resize;
+}
+
+/* Smooth transitions */
+* {
+  @apply transition-colors duration-200;
+}
+
+/* Focus styles */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-background;
+}
+
+/* Custom utility classes */
+@layer utilities {
+  .animate-in {
+    animation: fade-in 0.3s ease-in-out;
+  }
+  
+  .glass {
+    @apply bg-background/80 backdrop-blur-sm;
+  }
+  
+  .border-subtle {
+    @apply border border-border/50;
+  }
+}
