@@ -45,11 +45,29 @@ if multiprocessing.get_start_method(allow_none=True) != 'spawn':
     except RuntimeError:
         pass  # Already set
 
-# Set environment variables to limit workers and prevent resource leaks
+# COMPREHENSIVE environment variables to force single-threaded operation
+# and prevent ANY multiprocessing/threading in Marker and dependencies
 os.environ['MARKER_MAX_WORKERS'] = '1'
 os.environ['MARKER_PARALLEL_FACTOR'] = '1'
+os.environ['MARKER_WORKERS'] = '1'
+os.environ['MARKER_NUM_WORKERS'] = '1'
+os.environ['MARKER_DISABLE_MULTIPROCESSING'] = '1'
+
+# PyTorch threading control
 os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['NUMEXPR_NUM_THREADS'] = '1'
+os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+
+# Transformers/HuggingFace threading control
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
+# General Python threading control
+os.environ['PYTHONHASHSEED'] = '0'
+
+# Disable multiprocessing in common libraries
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'  # Force single GPU if available
 
 # Local imports
 from ..config import get_config, get_logger
@@ -65,10 +83,43 @@ def get_global_marker_models():
     if _GLOBAL_MARKER_MODELS is None:
         logger = get_logger(__name__)
         logger.info("Loading Marker models globally (one-time setup)...")
+        
+        # Clean up any existing resources before loading models
+        try:
+            from ..utils.resource_cleanup import cleanup_multiprocessing_resources, cleanup_semaphore_leaks
+            cleanup_multiprocessing_resources()
+            cleanup_semaphore_leaks()
+        except ImportError:
+            pass
+        
         start_time = time.time()
-        _GLOBAL_MARKER_MODELS = create_model_dict()
-        _GLOBAL_MODEL_LOAD_TIME = time.time() - start_time
-        logger.info(f"Global Marker models loaded in {_GLOBAL_MODEL_LOAD_TIME:.2f}s")
+        
+        try:
+            # Load models with single-threaded operation
+            _GLOBAL_MARKER_MODELS = create_model_dict()
+            _GLOBAL_MODEL_LOAD_TIME = time.time() - start_time
+            
+            # Clean up after model loading
+            try:
+                from ..utils.resource_cleanup import cleanup_multiprocessing_resources, cleanup_semaphore_leaks
+                cleanup_multiprocessing_resources()
+                cleanup_semaphore_leaks()
+            except ImportError:
+                pass
+            
+            logger.info(f"Global Marker models loaded in {_GLOBAL_MODEL_LOAD_TIME:.2f}s")
+            
+        except Exception as e:
+            # Clean up on error
+            try:
+                from ..utils.resource_cleanup import cleanup_multiprocessing_resources, cleanup_semaphore_leaks
+                cleanup_multiprocessing_resources()
+                cleanup_semaphore_leaks()
+            except ImportError:
+                pass
+            
+            logger.error(f"Failed to load global Marker models: {e}")
+            raise
     
     return _GLOBAL_MARKER_MODELS
 
@@ -129,11 +180,21 @@ class DocumentProcessor:
             "use_llm": False,            # No LLM for speed
             "force_ocr": False,          # Don't force OCR unless needed
             "disable_tqdm": True,        # No progress bars
-            # CRITICAL: Force single-worker operation to prevent semaphore leaks
+            
+            # CRITICAL: ABSOLUTELY FORCE single-worker operation to prevent semaphore leaks
             "workers": 1,                # Explicit single worker
             "max_workers": 1,            # Maximum 1 worker
             "parallel_factor": 1,        # No parallelism
             "batch_size": 1,             # Single document batch
+            "num_workers": 1,            # Alternative worker setting
+            "disable_multiprocessing": True,  # Disable multiprocessing completely
+            "single_threaded": True,     # Force single-threaded operation
+            "sequential": True,          # Force sequential processing
+            
+            # Additional safety settings
+            "max_parallel": 1,           # Maximum parallel processes
+            "cpu_count": 1,              # Force CPU count to 1
+            "pool_size": 1,              # Process pool size
         }
         
         # Only enable LLM if configured and API key available
@@ -157,7 +218,7 @@ class DocumentProcessor:
             llm_service=config_parser.get_llm_service()
         )
         
-        self.logger.info("Marker converter initialized")
+        self.logger.info("Marker converter initialized with strict single-worker configuration")
     
     async def process_document_async(
         self, 
@@ -263,28 +324,43 @@ class DocumentProcessor:
                 # Generate content-based document ID
                 document_id = self._generate_content_based_document_id(content_hash, file_path.name)
                 
-                # Process with Marker in thread pool with enhanced resource management
-                loop = asyncio.get_event_loop()
-                rendered = None
+                # Process with Marker directly (no ThreadPoolExecutor to avoid semaphore issues)
+                self.logger.debug(f"Starting direct Marker processing for: {file_path.name}")
+                
+                # Clean up any existing resources before processing
+                from ..utils.resource_cleanup import cleanup_multiprocessing_resources
+                cleanup_multiprocessing_resources()
+                
                 try:
-                    with ThreadPoolExecutor(max_workers=1) as executor:
-                        rendered = await loop.run_in_executor(
-                            executor,
-                            self._process_with_marker_sync,
-                            str(file_path)
-                        )
-                        # Explicit shutdown to prevent resource leaks
-                        executor.shutdown(wait=True)
+                    # Direct synchronous processing to avoid any threading/multiprocessing issues
+                    rendered = self._process_with_marker_sync(str(file_path))
                     
-                    # Clean up immediately after processing to prevent accumulation
-                    from ..utils.resource_cleanup import cleanup_multiprocessing_resources
+                    # Comprehensive cleanup after processing
                     cleanup_multiprocessing_resources()
+                    
+                    # Specific semaphore leak cleanup
+                    from ..utils.resource_cleanup import cleanup_semaphore_leaks
+                    cleanup_semaphore_leaks()
+                    
+                    self._clear_gpu_cache()
+                    
+                    self.logger.debug(f"Marker processing completed for: {file_path.name}")
                     
                 except Exception as e:
-                    # Clean up resources on exception
-                    from ..utils.resource_cleanup import cleanup_multiprocessing_resources
+                    # Aggressive cleanup on error
                     cleanup_multiprocessing_resources()
+                    
+                    # Specific semaphore leak cleanup
+                    from ..utils.resource_cleanup import cleanup_semaphore_leaks
+                    cleanup_semaphore_leaks()
+                    
                     self._clear_gpu_cache()
+                    
+                    # Force garbage collection
+                    import gc
+                    gc.collect()
+                    
+                    self.logger.error(f"Marker processing failed for {file_path.name}: {e}")
                     raise e
                 
                 # Extract text using proper Marker API (following documentation)
@@ -1085,17 +1161,28 @@ class DocumentProcessor:
                         try:
                             result = await self.process_document_async(file_path)
                             batch_results.append(result)
+                            
+                            # Clean up resources after each document in batch
+                            from ..utils.resource_cleanup import cleanup_semaphore_leaks
+                            cleanup_semaphore_leaks()
+                            
                         except Exception as e:
                             self.logger.error(f"Failed to process {file_path}: {e}")
+                            
+                            # Clean up on error
+                            from ..utils.resource_cleanup import cleanup_semaphore_leaks
+                            cleanup_semaphore_leaks()
                             continue
                     
                     results.extend(batch_results)
                     
-                    # Clear GPU cache between batches (documentation recommendation)
+                    # Enhanced cleanup between batches
                     self._clear_gpu_cache()
-                    
-                    # Clean up multiprocessing resources between batches
                     cleanup_multiprocessing_resources()
+                    
+                    # Specific semaphore cleanup between batches
+                    from ..utils.resource_cleanup import cleanup_semaphore_leaks
+                    cleanup_semaphore_leaks()
                 
                 # Small delay between batches
                 await asyncio.sleep(0.1)
