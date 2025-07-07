@@ -2,15 +2,13 @@
 
 ## Technical Overview
 
-This system implements a comprehensive Retrieval-Augmented Generation (RAG) pipeline optimized for academic document analysis. The architecture employs a multi-stage processing framework that transforms unstructured PDF documents into queryable knowledge representations through advanced NLP techniques.
+**RAG Pipeline Architecture**: Multi-stage document processing system implementing structure-aware PDF extraction → semantic chunking → dense retrieval → contextualized generation for academic corpora.
 
-**Document Processing Pipeline**: PDF documents undergo extraction using Marker, a state-of-the-art document understanding model that preserves semantic structure, mathematical notation, and citation relationships. The system performs intelligent chunking with overlapping windows to maintain contextual coherence across section boundaries.
+**Document Processing**: Marker-based extraction preserving LaTeX notation, citations, and hierarchical structure. Implements sliding window chunking with configurable overlap to maintain semantic coherence across section boundaries.
 
-**Embedding & Vectorization**: Text chunks are encoded using sentence-transformers models to generate high-dimensional semantic embeddings. These representations capture both syntactic and semantic properties essential for academic content retrieval.
+**Embedding Framework**: Sentence-transformers generate dense vector representations (768d) optimized for academic text similarity. ChromaDB vector store implements HNSW indexing with cosine similarity for sub-linear retrieval complexity.
 
-**Vector Storage & Retrieval**: ChromaDB serves as the persistent vector database, implementing approximate nearest neighbor search with cosine similarity metrics. The system maintains document metadata including source attribution, page numbers, and hierarchical section information for precise provenance tracking.
-
-**Generation Framework**: Query processing utilizes a local Ollama-based language model (LLaMA 3.2) for privacy-preserving inference. The retrieval mechanism employs semantic similarity scoring to select relevant context windows, which are then provided to the LLM for contextualized response generation with citation support.
+**Generation**: Local LLaMA 3.2 (7B parameters) via Ollama for privacy-preserving inference. Retrieval-augmented prompting with top-k similar chunks and structured citation metadata for source attribution.
 
 ## Quick Start
 
