@@ -30,20 +30,8 @@ __author__ = "ArXiv RAG Assistant Team"
 __email__ = "contact@arxivrag.com"
 __license__ = "MIT"
 
-# Core modules
-from .config import get_config, Config
-from .ingestion import DocumentProcessor
-from .storage import ChromaVectorStore
-from .embeddings import EmbeddingManager
-from .llm import OllamaClient
-from .tracking import SourceTracker
-from .chat import ChatEngine
-
-# Utilities
-from .utils import (
-    get_enhanced_logger, startup_banner, startup_complete, suppress_noisy_loggers,
-    DocumentStatusChecker, check_documents_main
-)
+# Note: Imports are now handled individually by modules to avoid circular dependencies
+# This allows each module to be imported independently without loading the entire package
 
 # Version info
 VERSION_INFO = (1, 0, 0)
@@ -68,16 +56,5 @@ __all__ = [
     "__email__",
     "__license__",
     "get_version",
-    "get_system_info",
-    "get_config",
-    "Config",
-    "DocumentProcessor",
-    "ChromaVectorStore", 
-    "EmbeddingManager",
-    "OllamaClient",
-    "SourceTracker",
-    "ChatEngine",
-    # Utilities
-    "get_enhanced_logger", "startup_banner", "startup_complete", "suppress_noisy_loggers",
-    "DocumentStatusChecker", "check_documents_main"
+    "get_system_info"
 ] 
