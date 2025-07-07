@@ -1,5 +1,5 @@
 # Core document processing
-marker-pdf>=0.2.0
+marker-pdf>=1.8.0
 
 # Local LLM integration
 ollama>=0.1.0
