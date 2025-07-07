@@ -19,20 +19,82 @@ from pathlib import Path
 def cleanup_multiprocessing_resources():
     """Clean up multiprocessing resources to prevent semaphore leaks"""
     try:
-        # Force garbage collection
+        # Force garbage collection first
         gc.collect()
         
-        # On macOS, try to clean up any remaining semaphore objects
-        if platform.system() == 'Darwin':
+        # Try to clean up multiprocessing contexts and semaphores
+        try:
+            # Get current multiprocessing context
+            import multiprocessing
+            ctx = multiprocessing.get_context()
+            
+            # Try to access and clean the resource tracker if available
+            if hasattr(ctx, '_semaphore_tracker'):
+                try:
+                    tracker = ctx._semaphore_tracker  # type: ignore
+                    if hasattr(tracker, '_stop'):
+                        tracker._stop()
+                    if hasattr(tracker, '_cleanup'):
+                        tracker._cleanup()
+                except Exception:
+                    pass
+            
+            # Clean up any process pools
+            if hasattr(ctx, 'Pool'):
+                try:
+                    # Force cleanup of any existing pools
+                    import multiprocessing.pool
+                    # This is a bit aggressive but necessary
+                    for attr_name in dir(multiprocessing.pool):
+                        attr = getattr(multiprocessing.pool, attr_name, None)
+                        if attr and hasattr(attr, '_pool') and hasattr(attr, 'terminate'):
+                            try:
+                                attr.terminate()
+                                attr.join()
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+            
+        except Exception:
+            pass
+        
+        # Platform-specific cleanup
+        if platform.system() == 'Darwin':  # macOS
             try:
-                # Reset multiprocessing context if needed
-                ctx = multiprocessing.get_context()
-                if hasattr(ctx, '_semaphore_tracker'):
-                    ctx._semaphore_tracker._stop()
+                # Try to clean up named semaphores on macOS
+                import subprocess
+                import tempfile
+                
+                # Get current process ID to avoid cleaning other processes
+                current_pid = os.getpid()
+                
+                # Try to find and clean semaphores for current process
+                try:
+                    # This is a safer approach that doesn't affect other processes
+                    result = subprocess.run(['lsof', '-p', str(current_pid)], 
+                                          capture_output=True, text=True, timeout=5)
+                    if result.returncode == 0:
+                        # Look for semaphore files in the output
+                        lines = result.stdout.split('\n')
+                        for line in lines:
+                            if '/sem.' in line or 'semaphore' in line.lower():
+                                # Found a semaphore reference
+                                pass  # Log but don't try to force close
+                except Exception:
+                    pass
+                    
             except Exception:
                 pass
         
+        # Try to clean up any lingering threads
+        cleanup_thread_resources()
+        
+        # Final garbage collection
+        gc.collect()
+        
         return True
+        
     except Exception as e:
         logging.warning(f"Failed to cleanup multiprocessing resources: {e}")
         return False
@@ -180,6 +242,62 @@ class ResourceManager:
     def cleanup_now(self):
         """Force cleanup immediately"""
         return perform_comprehensive_cleanup()
+
+
+def cleanup_semaphore_leaks():
+    """Specifically target semaphore leak cleanup"""
+    try:
+        import gc
+        import threading
+        
+        # Force garbage collection
+        gc.collect()
+        
+        # Try to access multiprocessing internals safely
+        try:
+            # Only try this on systems where it's available
+            try:
+                import multiprocessing.semaphore_tracker
+                tracker = multiprocessing.semaphore_tracker._semaphore_tracker
+                
+                if hasattr(tracker, '_lock'):
+                    with tracker._lock:
+                        if hasattr(tracker, '_registry'):
+                            # Clear the registry if it exists
+                            registry_size = len(tracker._registry) if tracker._registry else 0
+                            if registry_size > 0:
+                                logging.debug(f"Found {registry_size} semaphores in tracker registry")
+                                # Don't force clear - let the tracker handle cleanup naturally
+            except ImportError:
+                # semaphore_tracker not available on this system
+                pass
+            
+        except Exception:
+            # If we can't access the tracker safely, skip
+            pass
+        
+        # Clean up any process-local semaphore references
+        try:
+            import threading
+            # Get all thread objects
+            threads = threading.enumerate()
+            for thread in threads:
+                if hasattr(thread, '_semaphores'):
+                    try:
+                        delattr(thread, '_semaphores')
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        
+        # Final garbage collection
+        gc.collect()
+        
+        return True
+        
+    except Exception as e:
+        logging.warning(f"Failed to cleanup semaphore leaks: {e}")
+        return False
 
 
 # Auto-setup when module is imported

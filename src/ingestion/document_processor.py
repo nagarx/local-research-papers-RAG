@@ -45,11 +45,29 @@ if multiprocessing.get_start_method(allow_none=True) != 'spawn':
     except RuntimeError:
         pass  # Already set
 
-# Set environment variables to limit workers and prevent resource leaks
+# COMPREHENSIVE environment variables to force single-threaded operation
+# and prevent ANY multiprocessing/threading in Marker and dependencies
 os.environ['MARKER_MAX_WORKERS'] = '1'
 os.environ['MARKER_PARALLEL_FACTOR'] = '1'
+os.environ['MARKER_WORKERS'] = '1'
+os.environ['MARKER_NUM_WORKERS'] = '1'
+os.environ['MARKER_DISABLE_MULTIPROCESSING'] = '1'
+
+# PyTorch threading control
 os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['NUMEXPR_NUM_THREADS'] = '1'
+os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+
+# Transformers/HuggingFace threading control
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
+# General Python threading control
+os.environ['PYTHONHASHSEED'] = '0'
+
+# Disable multiprocessing in common libraries
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'  # Force single GPU if available
 
 # Local imports
 from ..config import get_config, get_logger
@@ -65,10 +83,43 @@ def get_global_marker_models():
     if _GLOBAL_MARKER_MODELS is None:
         logger = get_logger(__name__)
         logger.info("Loading Marker models globally (one-time setup)...")
+        
+        # Clean up any existing resources before loading models
+        try:
+            from ..utils.resource_cleanup import cleanup_multiprocessing_resources, cleanup_semaphore_leaks
+            cleanup_multiprocessing_resources()
+            cleanup_semaphore_leaks()
+        except ImportError:
+            pass
+        
         start_time = time.time()
-        _GLOBAL_MARKER_MODELS = create_model_dict()
-        _GLOBAL_MODEL_LOAD_TIME = time.time() - start_time
-        logger.info(f"Global Marker models loaded in {_GLOBAL_MODEL_LOAD_TIME:.2f}s")
+        
+        try:
+            # Load models with single-threaded operation
+            _GLOBAL_MARKER_MODELS = create_model_dict()
+            _GLOBAL_MODEL_LOAD_TIME = time.time() - start_time
+            
+            # Clean up after model loading
+            try:
+                from ..utils.resource_cleanup import cleanup_multiprocessing_resources, cleanup_semaphore_leaks
+                cleanup_multiprocessing_resources()
+                cleanup_semaphore_leaks()
+            except ImportError:
+                pass
+            
+            logger.info(f"Global Marker models loaded in {_GLOBAL_MODEL_LOAD_TIME:.2f}s")
+            
+        except Exception as e:
+            # Clean up on error
+            try:
+                from ..utils.resource_cleanup import cleanup_multiprocessing_resources, cleanup_semaphore_leaks
+                cleanup_multiprocessing_resources()
+                cleanup_semaphore_leaks()
+            except ImportError:
+                pass
+            
+            logger.error(f"Failed to load global Marker models: {e}")
+            raise
     
     return _GLOBAL_MARKER_MODELS
 
@@ -129,11 +180,21 @@ class DocumentProcessor:
             "use_llm": False,            # No LLM for speed
             "force_ocr": False,          # Don't force OCR unless needed
             "disable_tqdm": True,        # No progress bars
-            # CRITICAL: Force single-worker operation to prevent semaphore leaks
+            
+            # CRITICAL: ABSOLUTELY FORCE single-worker operation to prevent semaphore leaks
             "workers": 1,                # Explicit single worker
             "max_workers": 1,            # Maximum 1 worker
             "parallel_factor": 1,        # No parallelism
             "batch_size": 1,             # Single document batch
+            "num_workers": 1,            # Alternative worker setting
+            "disable_multiprocessing": True,  # Disable multiprocessing completely
+            "single_threaded": True,     # Force single-threaded operation
+            "sequential": True,          # Force sequential processing
+            
+            # Additional safety settings
+            "max_parallel": 1,           # Maximum parallel processes
+            "cpu_count": 1,              # Force CPU count to 1
+            "pool_size": 1,              # Process pool size
         }
         
         # Only enable LLM if configured and API key available
@@ -157,7 +218,7 @@ class DocumentProcessor:
             llm_service=config_parser.get_llm_service()
         )
         
-        self.logger.info("Marker converter initialized")
+        self.logger.info("Marker converter initialized with strict single-worker configuration")
     
     async def process_document_async(
         self, 
@@ -207,26 +268,29 @@ class DocumentProcessor:
                                     existing_doc["document_id"]
                                 )
                                 
-                                self.logger.info(f"Regenerated {len(chunks)} chunks from saved text for {file_path.name}")
-                                
-                                return {
-                                    "id": existing_doc["document_id"],
-                                    "source_path": str(file_path),
-                                    "filename": file_path.name,
-                                    "processed_at": existing_doc["extracted_at"],
-                                    "processing_time": 0.0,  # No processing time for existing document
-                                    "status": "already_processed",
-                                    "content_hash": content_hash,
-                                    "raw_text_path": saved_text_data.get("text_file_path"),
-                                    "content": {
-                                        "full_text": saved_text_data["raw_text"],
-                                        "blocks": chunks,  # Regenerated chunks for indexing
-                                        "page_count": existing_doc.get("extraction_stats", {}).get("lines", 0),
-                                        "total_blocks": len(chunks),
-                                        "images": existing_doc.get("images", [])
-                                    },
-                                    "metadata": existing_doc
-                                }
+                                if chunks:  # Only proceed if chunks were successfully generated
+                                    self.logger.info(f"Regenerated {len(chunks)} chunks from saved text for {file_path.name}")
+                                    
+                                    return {
+                                        "id": existing_doc["document_id"],
+                                        "source_path": str(file_path),
+                                        "filename": file_path.name,
+                                        "processed_at": existing_doc["extracted_at"],
+                                        "processing_time": 0.0,  # No processing time for existing document
+                                        "status": "already_processed",
+                                        "content_hash": content_hash,
+                                        "raw_text_path": saved_text_data.get("text_file_path"),
+                                        "content": {
+                                            "full_text": saved_text_data["raw_text"],
+                                            "blocks": chunks,  # Regenerated chunks for indexing
+                                            "page_count": existing_doc.get("extraction_stats", {}).get("lines", 0),
+                                            "total_blocks": len(chunks),
+                                            "images": existing_doc.get("images", [])
+                                        },
+                                        "metadata": existing_doc
+                                    }
+                                else:
+                                    self.logger.warning(f"Failed to regenerate chunks for {file_path.name}, will reprocess")
                             else:
                                 self.logger.warning(f"Could not load raw text for {file_path.name}, will reprocess")
                         except Exception as e:
@@ -260,22 +324,43 @@ class DocumentProcessor:
                 # Generate content-based document ID
                 document_id = self._generate_content_based_document_id(content_hash, file_path.name)
                 
-                # Process with Marker in thread pool with enhanced resource management
-                loop = asyncio.get_event_loop()
-                rendered = None
+                # Process with Marker directly (no ThreadPoolExecutor to avoid semaphore issues)
+                self.logger.debug(f"Starting direct Marker processing for: {file_path.name}")
+                
+                # Clean up any existing resources before processing
+                from ..utils.resource_cleanup import cleanup_multiprocessing_resources
+                cleanup_multiprocessing_resources()
+                
                 try:
-                    with ThreadPoolExecutor(max_workers=1) as executor:
-                        rendered = await loop.run_in_executor(
-                            executor,
-                            self._process_with_marker_sync,
-                            str(file_path)
-                        )
-                        # Explicit shutdown to prevent resource leaks
-                        executor.shutdown(wait=True)
-                except Exception as e:
-                    # Clean up resources on exception
-                    from ..utils.resource_cleanup import cleanup_multiprocessing_resources
+                    # Direct synchronous processing to avoid any threading/multiprocessing issues
+                    rendered = self._process_with_marker_sync(str(file_path))
+                    
+                    # Comprehensive cleanup after processing
                     cleanup_multiprocessing_resources()
+                    
+                    # Specific semaphore leak cleanup
+                    from ..utils.resource_cleanup import cleanup_semaphore_leaks
+                    cleanup_semaphore_leaks()
+                    
+                    self._clear_gpu_cache()
+                    
+                    self.logger.debug(f"Marker processing completed for: {file_path.name}")
+                    
+                except Exception as e:
+                    # Aggressive cleanup on error
+                    cleanup_multiprocessing_resources()
+                    
+                    # Specific semaphore leak cleanup
+                    from ..utils.resource_cleanup import cleanup_semaphore_leaks
+                    cleanup_semaphore_leaks()
+                    
+                    self._clear_gpu_cache()
+                    
+                    # Force garbage collection
+                    import gc
+                    gc.collect()
+                    
+                    self.logger.error(f"Marker processing failed for {file_path.name}: {e}")
                     raise e
                 
                 # Extract text using proper Marker API (following documentation)
@@ -536,61 +621,152 @@ class DocumentProcessor:
     
     def _create_text_chunks(self, text: str, filename: str, document_id: str, rendered=None) -> List[Dict[str, Any]]:
         """Create optimized text chunks for RAG with semantic coherence and proper page attribution"""
-        if not text:
+        if not text or not text.strip():
+            self.logger.warning(f"Empty or whitespace-only text provided for chunking: {filename}")
             return []
         
-        # Extract page breaks from Markdown if available
-        page_markers = self._extract_page_markers(text)
+        if not document_id or not document_id.strip():
+            self.logger.error(f"Invalid document_id provided for chunking: {filename}")
+            return []
         
-        # Configuration
-        chunk_size = self.config.document_processing.max_chunk_size
-        overlap_size = self.config.document_processing.chunk_overlap
-        
-        # Split text into semantic units (sentences/paragraphs)
-        semantic_units = self._split_into_semantic_units(text)
-        
-        chunks = []
-        current_chunk = ""
-        current_chunk_units = []
-        current_position = 0
-        
-        for unit in semantic_units:
-            unit_length = len(unit["text"])
+        try:
+            # Extract page breaks from Markdown if available
+            page_markers = self._extract_page_markers(text)
             
-            # Check if adding this unit would exceed chunk size
-            if (len(current_chunk) + unit_length > chunk_size and 
-                current_chunk.strip() and 
-                len(current_chunk_units) > 0):
+            # Configuration
+            chunk_size = self.config.document_processing.max_chunk_size
+            overlap_size = self.config.document_processing.chunk_overlap
+            
+            # Validate configuration
+            if chunk_size <= 0:
+                self.logger.warning(f"Invalid chunk_size {chunk_size}, using default 1000")
+                chunk_size = 1000
+            
+            if overlap_size < 0:
+                self.logger.warning(f"Invalid overlap_size {overlap_size}, using default 200")
+                overlap_size = 200
+            
+            # Split text into semantic units (sentences/paragraphs)
+            semantic_units = self._split_into_semantic_units(text)
+            
+            if not semantic_units:
+                self.logger.warning(f"No semantic units found in text for {filename}")
+                # Create a single chunk with the entire text as fallback
+                fallback_chunk = {
+                    "id": f"{document_id}_chunk_0",
+                    "text": text.strip()[:chunk_size],  # Truncate if too long
+                    "chunk_index": 0,
+                    "chunk_type": "text",
+                    "page_number": 1,
+                    "block_type": "Text",
+                    "semantic_units": 1,
+                    "has_structural_elements": False,
+                    "source_info": {
+                        "document_id": document_id,
+                        "document_name": filename,
+                        "page_number": 1,
+                        "block_index": 0,
+                        "block_type": "text",
+                        "chunk_type": "text",
+                        "start_position": 0,
+                        "end_position": len(text.strip()[:chunk_size])
+                    }
+                }
+                return [fallback_chunk]
+            
+            chunks = []
+            current_chunk = ""
+            current_chunk_units = []
+            current_position = 0
+            
+            for unit in semantic_units:
+                unit_length = len(unit["text"])
                 
-                # Finalize current chunk
+                # Check if adding this unit would exceed chunk size
+                if (len(current_chunk) + unit_length > chunk_size and 
+                    current_chunk.strip() and 
+                    len(current_chunk_units) > 0):
+                    
+                    # Finalize current chunk
+                    chunk_info = self._finalize_chunk(
+                        current_chunk_units, current_chunk, document_id, filename, 
+                        chunks, page_markers, current_position - len(current_chunk)
+                    )
+                    chunks.append(chunk_info)
+                    
+                    # Start new chunk with overlap
+                    overlap_units, overlap_text = self._create_overlap(current_chunk_units, overlap_size)
+                    current_chunk_units = overlap_units
+                    current_chunk = overlap_text
+                
+                # Add current unit to chunk
+                current_chunk_units.append(unit)
+                current_chunk += unit["text"]
+                current_position += unit_length
+            
+            # Add final chunk if there's content
+            if current_chunk.strip():
                 chunk_info = self._finalize_chunk(
-                    current_chunk_units, current_chunk, document_id, filename, 
+                    current_chunk_units, current_chunk, document_id, filename,
                     chunks, page_markers, current_position - len(current_chunk)
                 )
                 chunks.append(chunk_info)
-                
-                # Start new chunk with overlap
-                overlap_units, overlap_text = self._create_overlap(current_chunk_units, overlap_size)
-                current_chunk_units = overlap_units
-                current_chunk = overlap_text
             
-            # Add current unit to chunk
-            current_chunk_units.append(unit)
-            current_chunk += unit["text"]
-            current_position += unit_length
-        
-        # Add final chunk if there's content
-        if current_chunk.strip():
-            chunk_info = self._finalize_chunk(
-                current_chunk_units, current_chunk, document_id, filename,
-                chunks, page_markers, current_position - len(current_chunk)
-            )
-            chunks.append(chunk_info)
-        
-        # Post-process chunks for quality
-        chunks = self._post_process_chunks(chunks)
-        
-        return chunks
+            # Post-process chunks for quality
+            chunks = self._post_process_chunks(chunks)
+            
+            # Final validation
+            if not chunks:
+                self.logger.warning(f"No chunks created after post-processing for {filename}, creating fallback")
+                # Create a single fallback chunk
+                fallback_chunk = {
+                    "id": f"{document_id}_chunk_0",
+                    "text": text.strip()[:chunk_size],
+                    "chunk_index": 0,
+                    "chunk_type": "text",
+                    "page_number": 1,
+                    "block_type": "Text",
+                    "semantic_units": 1,
+                    "has_structural_elements": False,
+                    "source_info": {
+                        "document_id": document_id,
+                        "document_name": filename,
+                        "page_number": 1,
+                        "block_index": 0,
+                        "block_type": "text",
+                        "chunk_type": "text",
+                        "start_position": 0,
+                        "end_position": len(text.strip()[:chunk_size])
+                    }
+                }
+                chunks = [fallback_chunk]
+            
+            return chunks
+            
+        except Exception as e:
+            self.logger.error(f"Error creating text chunks for {filename}: {e}")
+            # Return fallback chunk in case of error
+            fallback_chunk = {
+                "id": f"{document_id}_chunk_0",
+                "text": text.strip()[:1000] if text else "Error processing document",
+                "chunk_index": 0,
+                "chunk_type": "text",
+                "page_number": 1,
+                "block_type": "Text",
+                "semantic_units": 1,
+                "has_structural_elements": False,
+                "source_info": {
+                    "document_id": document_id,
+                    "document_name": filename,
+                    "page_number": 1,
+                    "block_index": 0,
+                    "block_type": "text",
+                    "chunk_type": "text",
+                    "start_position": 0,
+                    "end_position": len(text.strip()[:1000]) if text else 0
+                }
+            }
+            return [fallback_chunk]
     
     def _split_into_semantic_units(self, text: str) -> List[Dict[str, Any]]:
         """Split text into semantic units (sentences, paragraphs, sections)"""
@@ -807,11 +983,14 @@ class DocumentProcessor:
         else:
             chunk_type = "text"
         
+        # Generate consistent chunk index (will be updated in post-processing if needed)
+        chunk_index = len(existing_chunks)
+        
         # Create chunk info
         chunk = {
-            "id": f"{document_id}_chunk_{len(existing_chunks)}",
+            "id": f"{document_id}_chunk_{chunk_index}",
             "text": text.strip(),
-            "chunk_index": len(existing_chunks),
+            "chunk_index": chunk_index,
             "chunk_type": chunk_type,
             "page_number": page_number,
             "block_type": "Text",  # Keep for compatibility
@@ -821,7 +1000,7 @@ class DocumentProcessor:
                 "document_id": document_id,
                 "document_name": filename,
                 "page_number": page_number,
-                "block_index": len(existing_chunks),
+                "block_index": chunk_index,
                 "block_type": "text",
                 "chunk_type": chunk_type,
                 "start_position": chunk_start_position,
@@ -849,15 +1028,18 @@ class DocumentProcessor:
                     if len(prev_chunk["text"]) + len(text) < self.config.document_processing.max_chunk_size:
                         prev_chunk["text"] += "\n\n" + text
                         prev_chunk["semantic_units"] += chunk.get("semantic_units", 1)
+                        # Update end position to include merged content
+                        prev_chunk["source_info"]["end_position"] = chunk["source_info"]["end_position"]
                         continue
             
             # Clean up text
             chunk["text"] = self._clean_chunk_text(text)
             
-            # Update indices after any merging
-            chunk["chunk_index"] = len(processed_chunks)
-            chunk["id"] = f"{chunk['source_info']['document_id']}_chunk_{len(processed_chunks)}"
-            chunk["source_info"]["block_index"] = len(processed_chunks)
+            # Update indices after any merging (ensure consistency)
+            final_chunk_index = len(processed_chunks)
+            chunk["chunk_index"] = final_chunk_index
+            chunk["id"] = f"{chunk['source_info']['document_id']}_chunk_{final_chunk_index}"
+            chunk["source_info"]["block_index"] = final_chunk_index
             
             processed_chunks.append(chunk)
         
@@ -909,7 +1091,7 @@ class DocumentProcessor:
     
     def _get_page_number_for_position(self, position: int, page_markers: List[int]) -> int:
         """Determine page number based on character position in text"""
-        if not page_markers:
+        if not page_markers or position < 0:
             return 1
         
         # page_markers structure:
@@ -922,19 +1104,26 @@ class DocumentProcessor:
         # Default to page 1 for content before any markers
         page = 1
         
-        # Check each marker position (skip index 0 which is just document start)
-        for i in range(1, len(page_markers)):
-            if position >= page_markers[i]:
-                # The marker at page_markers[i] indicates page number (i-1)+1 = i
-                # But since Marker uses 0-based indexing for page numbers:
-                # {0} = page 1, {1} = page 2, {2} = page 3, etc.
-                # So marker at index i corresponds to page i
-                page = i
-            else:
-                break
+        try:
+            # Check each marker position (skip index 0 which is just document start)
+            for i in range(1, len(page_markers)):
+                if position >= page_markers[i]:
+                    # The marker at page_markers[i] indicates page number (i-1)+1 = i
+                    # But since Marker uses 0-based indexing for page numbers:
+                    # {0} = page 1, {1} = page 2, {2} = page 3, etc.
+                    # So marker at index i corresponds to page i
+                    page = i
+                else:
+                    break
+            
+            # Ensure page is at least 1 and reasonable (validate bounds)
+            page = max(1, min(page, 1000))  # Cap at 1000 pages for safety
+            
+        except Exception as e:
+            self.logger.warning(f"Error calculating page number for position {position}: {e}")
+            page = 1
         
-        # Ensure page is at least 1 and reasonable
-        return max(1, min(page, 50))
+        return page
     
     def _clear_gpu_cache(self):
         """Clear GPU cache (following documentation)"""
@@ -972,17 +1161,28 @@ class DocumentProcessor:
                         try:
                             result = await self.process_document_async(file_path)
                             batch_results.append(result)
+                            
+                            # Clean up resources after each document in batch
+                            from ..utils.resource_cleanup import cleanup_semaphore_leaks
+                            cleanup_semaphore_leaks()
+                            
                         except Exception as e:
                             self.logger.error(f"Failed to process {file_path}: {e}")
+                            
+                            # Clean up on error
+                            from ..utils.resource_cleanup import cleanup_semaphore_leaks
+                            cleanup_semaphore_leaks()
                             continue
                     
                     results.extend(batch_results)
                     
-                    # Clear GPU cache between batches (documentation recommendation)
+                    # Enhanced cleanup between batches
                     self._clear_gpu_cache()
-                    
-                    # Clean up multiprocessing resources between batches
                     cleanup_multiprocessing_resources()
+                    
+                    # Specific semaphore cleanup between batches
+                    from ..utils.resource_cleanup import cleanup_semaphore_leaks
+                    cleanup_semaphore_leaks()
                 
                 # Small delay between batches
                 await asyncio.sleep(0.1)
