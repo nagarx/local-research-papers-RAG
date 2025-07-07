@@ -15,11 +15,19 @@ import streamlit as st
 import asyncio
 import time
 import json
+import warnings
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import logging
 from datetime import datetime
 import pandas as pd
+
+# Suppress Streamlit warnings
+warnings.filterwarnings('ignore', module='streamlit')
+warnings.filterwarnings('ignore', message='.*streamlit.*')
+
+# Set Streamlit logging to ERROR level to reduce noise
+logging.getLogger('streamlit').setLevel(logging.ERROR)
 
 # Optional plotly imports for analytics
 try:
@@ -1338,48 +1346,125 @@ class StreamlitRAGApp:
         if not st.session_state.chat_engine:
             st.error("❌ Please initialize the system first")
             return
-        
+
         if storage_types is None:
             storage_types = ['temporary'] * len(uploaded_files)
-        
-        # Save uploaded files temporarily
+
+        # Save uploaded files temporarily with better handling
         temp_dir = Path("temp_uploads")
         temp_dir.mkdir(exist_ok=True)
+
+        # Import the thread-safe progress tracker
+        try:
+            from ..utils.thread_safe_progress import ThreadSafeProgressTracker, StreamlitProgressRenderer
+        except ImportError:
+            from src.utils.thread_safe_progress import ThreadSafeProgressTracker, StreamlitProgressRenderer
+
+        # Create thread-safe progress tracker
+        progress_tracker = ThreadSafeProgressTracker("Document Processing")
+        progress_renderer = StreamlitProgressRenderer(progress_tracker)
         
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
+        # Setup UI components
+        progress_container = st.container()
+        with progress_container:
+            progress_renderer.setup_ui()
+
         try:
             file_paths = []
+            saved_files_info = []
+
+            # Save files with enhanced error handling and validation
+            progress_tracker.set_total_steps(len(uploaded_files) + 1)  # +1 for processing step
             
-            # Save files
             for i, file in enumerate(uploaded_files):
-                temp_path = temp_dir / file.name
-                with open(temp_path, "wb") as f:
-                    f.write(file.read())
-                file_paths.append(str(temp_path))
+                # Create a safe filename
+                safe_filename = "".join(c for c in file.name if c.isalnum() or c in (' ', '-', '_', '.')).rstrip()
+                if not safe_filename.endswith('.pdf'):
+                    safe_filename += '.pdf'
                 
-                progress_bar.progress((i + 1) / len(uploaded_files) * 0.3)
-                status_text.text(f"📄 Saved {file.name}")
+                temp_path = temp_dir / safe_filename
+                
+                # Ensure the file is saved properly
+                try:
+                    # Read file content first
+                    file.seek(0)  # Reset file pointer to beginning
+                    file_content = file.read()
+                    
+                    if not file_content:
+                        raise ValueError(f"File {file.name} appears to be empty")
+                    
+                    # Save to temporary location
+                    with open(temp_path, "wb") as f:
+                        f.write(file_content)
+                    
+                    # Verify file was written correctly
+                    if not temp_path.exists():
+                        raise ValueError(f"Failed to create file {temp_path}")
+                    
+                    file_size = temp_path.stat().st_size
+                    if file_size == 0:
+                        raise ValueError(f"File {temp_path} was created but is empty")
+                    
+                    if file_size != len(file_content):
+                        raise ValueError(f"File size mismatch for {temp_path}: expected {len(file_content)}, got {file_size}")
+                    
+                    file_paths.append(str(temp_path))
+                    saved_files_info.append({
+                        'original_name': file.name,
+                        'safe_name': safe_filename,
+                        'path': str(temp_path),
+                        'size': file_size
+                    })
+                    
+                    progress_tracker.update(i + 1, f"📄 Saved {file.name} ({file_size:,} bytes)")
+                    progress_renderer.update_ui()
+                    
+                    # Small delay to ensure file system operations complete
+                    time.sleep(0.1)
+                    
+                except Exception as e:
+                    progress_tracker.set_error(f"Failed to save file {file.name}: {str(e)}")
+                    progress_renderer.update_ui()
+                    st.error(f"❌ Failed to save {file.name}: {e}")
+                    # Clean up any partial files
+                    for info in saved_files_info:
+                        Path(info['path']).unlink(missing_ok=True)
+                    return
+
+            # Verify all files still exist before processing
+            missing_files = []
+            for info in saved_files_info:
+                path_obj = Path(info['path'])
+                if not path_obj.exists():
+                    missing_files.append(info['original_name'])
+                elif path_obj.stat().st_size != info['size']:
+                    missing_files.append(f"{info['original_name']} (size changed)")
             
+            if missing_files:
+                error_msg = f"Files missing or corrupted before processing: {', '.join(missing_files)}"
+                progress_tracker.set_error(error_msg)
+                progress_renderer.update_ui()
+                st.error(f"❌ {error_msg}")
+                return
+
+            # Log file verification success
+            st.info(f"✅ Successfully saved and verified {len(file_paths)} files for processing")
+            for info in saved_files_info:
+                st.write(f"  📄 {info['original_name']} → {info['safe_name']} ({info['size']:,} bytes)")
+
             # Process documents using actual RAG system
-            status_text.text("🔄 Processing documents with Marker...")
-            
-            # Define progress callback - matching chat_engine signature
-            def update_progress(message, processed_count=None, total_count=None):
-                if processed_count is not None and total_count is not None:
-                    progress = 0.3 + (processed_count / total_count) * 0.7
-                    progress_bar.progress(progress)
-                    status_text.text(f"🔄 {message} ({processed_count}/{total_count})")
-                else:
-                    status_text.text(f"🔄 {message}")
-            
+            progress_tracker.update(len(uploaded_files), "🔄 Starting document processing with Marker...")
+            progress_renderer.update_ui()
+
+            # Create thread-safe progress callback
+            progress_callback = progress_tracker.create_callback()
+
             # Process documents asynchronously
             result = asyncio.run(
                 st.session_state.chat_engine.add_documents_async(
                     file_paths=file_paths,
                     storage_types=storage_types,
-                    progress_callback=update_progress,
+                    progress_callback=progress_callback,
                     force_reprocess=force_reprocess
                 )
             )
@@ -1395,8 +1480,8 @@ class StreamlitRAGApp:
                 
                 chunks_per_doc = total_chunks // len(file_paths) if len(file_paths) > 0 else 0
                 
-                for i, file_path in enumerate(file_paths):
-                    filename = Path(file_path).name
+                for i, info in enumerate(saved_files_info):
+                    filename = info['original_name']
                     st.session_state.processed_documents.append({
                         'filename': filename,
                         'total_chunks': chunks_per_doc,
@@ -1404,8 +1489,8 @@ class StreamlitRAGApp:
                         'storage_type': storage_types[i] if i < len(storage_types) else 'temporary'
                     })
                 
-                progress_bar.progress(1.0)
-                status_text.text("✅ All documents processed successfully!")
+                progress_tracker.update(len(file_paths), "✅ All documents processed successfully!", is_complete=True)
+                progress_renderer.update_ui()
                 
                 # Update session info
                 st.session_state.session_info = st.session_state.chat_engine.get_session_info()
@@ -1423,17 +1508,39 @@ class StreamlitRAGApp:
                        f"- Temporary documents: {temp_count}\n" +
                        f"- Permanent documents: {perm_count}")
             else:
+                progress_tracker.set_error(f"Processing failed: {result.get('error', 'Unknown error')}")
+                progress_renderer.update_ui()
                 st.error(f"❌ Processing failed: {result.get('error', 'Unknown error')}")
+                
+                # Show detailed error information if available
+                if 'failed_indexing_details' in result:
+                    with st.expander("❌ Detailed Error Information"):
+                        for error_detail in result['failed_indexing_details']:
+                            st.write(f"📄 **{error_detail['filename']}**: {error_detail['reason']}")
             
-            # Clean up temp files
-            for file_path in file_paths:
-                Path(file_path).unlink(missing_ok=True)
+            # Clean up UI components
+            progress_renderer.cleanup()
             
         except Exception as e:
+            progress_tracker.set_error(f"Error processing documents: {str(e)}")
+            progress_renderer.update_ui()
             st.error(f"❌ Error processing documents: {e}")
-            # Clean up temp files on error
-            for file_path in file_paths:
-                Path(file_path).unlink(missing_ok=True)
+            
+            # Show traceback for debugging
+            import traceback
+            with st.expander("🔍 Debug Information"):
+                st.code(traceback.format_exc())
+            
+            # Clean up UI components
+            progress_renderer.cleanup()
+            
+        finally:
+            # Clean up temp files only after everything is complete
+            try:
+                for info in saved_files_info:
+                    Path(info['path']).unlink(missing_ok=True)
+            except Exception as e:
+                st.warning(f"⚠️ Could not clean up some temporary files: {e}")
     
     def render_chat_interface(self):
         """Render the chat interface"""

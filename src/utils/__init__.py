@@ -12,6 +12,9 @@ from .enhanced_logging import (
     EnhancedLogger, ProgressTracker, PerformanceMonitor
 )
 
+# Thread-safe progress tracking (lazy import to avoid circular dependencies)
+# from .thread_safe_progress import ThreadSafeProgressTracker, StreamlitProgressRenderer, ProgressState
+
 # Other imports available on-demand to avoid circular imports
 __all__ = [
     # Document status utilities
@@ -19,5 +22,7 @@ __all__ = [
     'DocumentStatusChecker',
     # Enhanced logging
     'get_enhanced_logger', 'startup_banner', 'startup_complete', 'suppress_noisy_loggers',
-    'EnhancedLogger', 'ProgressTracker', 'PerformanceMonitor'
+    'EnhancedLogger', 'ProgressTracker', 'PerformanceMonitor',
+    # Thread-safe progress tracking (imported on-demand)
+    # 'ThreadSafeProgressTracker', 'StreamlitProgressRenderer', 'ProgressState'
 ]

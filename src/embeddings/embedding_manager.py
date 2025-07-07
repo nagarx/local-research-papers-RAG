@@ -266,7 +266,7 @@ class EmbeddingManager:
             return cached_embedding
         
         # Generate embedding in thread pool with better resource management
-        max_workers = min(2, os.cpu_count() or 1)  # Better thread management
+        max_workers = min(1, os.cpu_count() or 1)  # Conservative thread management
         loop = asyncio.get_event_loop()
         
         try:
@@ -276,6 +276,9 @@ class EmbeddingManager:
                     self._generate_embedding, 
                     processed_text
                 )
+                # Explicit shutdown to prevent resource leaks
+                executor.shutdown(wait=True)
+                
         except Exception as e:
             self.logger.error(f"Failed to generate embedding in thread pool: {e}")
             self._stats["errors_recovered"] += 1
@@ -380,6 +383,8 @@ class EmbeddingManager:
                             self._generate_batch_embeddings,
                             batch_texts
                         )
+                        # Explicit shutdown to prevent resource leaks
+                        executor.shutdown(wait=True)
                     
                     processed_embeddings.extend(batch_embeddings)
                     

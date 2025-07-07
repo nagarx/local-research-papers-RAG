@@ -6,6 +6,7 @@ import asyncio
 import time
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from pathlib import Path
 
 from ..config import get_config, get_logger
 from ..ingestion import DocumentProcessor
@@ -13,6 +14,13 @@ from ..embeddings import EmbeddingManager
 from ..storage import ChromaVectorStore, SessionManager
 from ..llm import OllamaClient
 from ..tracking import SourceTracker, SourceReference
+
+# Import resource cleanup utilities
+try:
+    from ..utils.resource_cleanup import ResourceManager, setup_resource_monitoring
+    setup_resource_monitoring()
+except ImportError:
+    ResourceManager = None
 
 
 class ChatEngine:
@@ -138,7 +146,29 @@ class ChatEngine:
                 if storage_type not in ['temporary', 'permanent']:
                     raise ValueError(f"Invalid storage type: {storage_type}. Must be 'temporary' or 'permanent'")
             
+            # Validate that all files exist before starting processing
+            missing_files = []
+            for file_path in file_paths:
+                path_obj = Path(file_path)
+                if not path_obj.exists():
+                    missing_files.append(str(path_obj))
+                elif not path_obj.is_file():
+                    missing_files.append(f"{path_obj} (not a file)")
+                elif path_obj.stat().st_size == 0:
+                    missing_files.append(f"{path_obj} (empty file)")
+            
+            if missing_files:
+                error_msg = f"Files not accessible: {', '.join(missing_files)}"
+                self.logger.error(error_msg)
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "total_documents": 0,
+                    "processing_time": time.time() - start_time
+                }
+            
             self.logger.info(f"Processing {len(file_paths)} documents...")
+            self.logger.info(f"File validation passed - all {len(file_paths)} files are accessible")
             
             # Process documents with Marker
             if progress_callback:
@@ -149,8 +179,14 @@ class ChatEngine:
             
             for i, file_path in enumerate(file_paths):
                 try:
+                    # Double-check file exists right before processing
+                    path_obj = Path(file_path)
+                    if not path_obj.exists():
+                        self.logger.error(f"File disappeared during processing: {file_path}")
+                        continue
+                    
                     if progress_callback:
-                        progress_callback(f"Processing {file_path}...", i + 1, len(file_paths))
+                        progress_callback(f"Processing {path_obj.name}...", i + 1, len(file_paths))
                     
                     processed_doc = await self.document_processor.process_document_async(
                         file_path, 
@@ -167,6 +203,7 @@ class ChatEngine:
                         
                 except Exception as e:
                     self.logger.error(f"Failed to process {file_path}: {e}")
+                    # Add to failed processing details
                     continue
             
             if not processed_docs and not skipped_docs:

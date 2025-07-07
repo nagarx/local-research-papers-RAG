@@ -22,6 +22,13 @@ import logging
 from bs4 import BeautifulSoup
 import torch
 
+# Configure for headless operation early to prevent GUI issues
+try:
+    from ..utils.torch_utils import configure_for_headless_operation
+    configure_for_headless_operation()
+except ImportError:
+    pass
+
 # Marker imports
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
@@ -236,6 +243,8 @@ class DocumentProcessor:
                     self._process_with_marker_sync,
                     str(file_path)
                 )
+                # Explicit shutdown to prevent resource leaks
+                executor.shutdown(wait=True)
             
             # Extract text using proper Marker API (following documentation)
             try:
@@ -444,7 +453,43 @@ class DocumentProcessor:
     
     def _process_with_marker_sync(self, file_path: str):
         """Process document with Marker (synchronous, following documentation)"""
-        return self.converter(file_path)
+        try:
+            # Validate file exists and is accessible
+            file_path_obj = Path(file_path)
+            if not file_path_obj.exists():
+                raise FileNotFoundError(f"File does not exist: {file_path}")
+            
+            if not file_path_obj.is_file():
+                raise ValueError(f"Path is not a file: {file_path}")
+            
+            # Check file size (Marker might have limits)
+            file_size = file_path_obj.stat().st_size
+            if file_size == 0:
+                raise ValueError(f"File is empty: {file_path}")
+            
+            if file_size > 100 * 1024 * 1024:  # 100MB limit
+                self.logger.warning(f"Large file detected ({file_size / 1024 / 1024:.1f}MB): {file_path}")
+            
+            # Process with Marker
+            self.logger.debug(f"Starting Marker processing for: {file_path}")
+            result = self.converter(file_path)
+            self.logger.debug(f"Marker processing completed for: {file_path}")
+            
+            return result
+            
+        except FileNotFoundError as e:
+            self.logger.error(f"File not found during Marker processing: {e}")
+            raise
+        except PermissionError as e:
+            self.logger.error(f"Permission denied accessing file: {file_path} - {e}")
+            raise
+        except Exception as e:
+            # Log the actual error details
+            self.logger.error(f"Marker processing failed for {file_path}: {type(e).__name__}: {str(e)}")
+            if hasattr(e, '__traceback__'):
+                import traceback
+                self.logger.debug(f"Full traceback: {traceback.format_exc()}")
+            raise RuntimeError(f"Document processing failed: {str(e)}") from e
     
     def _fallback_extraction(self, rendered):
         """Fallback if text_from_rendered fails"""
