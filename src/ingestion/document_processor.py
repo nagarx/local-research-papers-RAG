@@ -67,6 +67,13 @@ class DocumentProcessor:
         self.config = get_config()
         self.logger = get_logger(__name__)
         
+        # Try to get enhanced logger
+        try:
+            from ..utils.enhanced_logging import get_enhanced_logger
+            self.enhanced_logger = get_enhanced_logger(__name__)
+        except ImportError:
+            self.enhanced_logger = None
+        
         # Use global models (following documentation pattern)
         self.marker_models = get_global_marker_models()
         
@@ -81,7 +88,10 @@ class DocumentProcessor:
             "cache_hits": 0
         }
         
-        self.logger.info("DocumentProcessor initialized successfully")
+        if self.enhanced_logger:
+            self.enhanced_logger.system_ready("DocumentProcessor", "Marker models loaded and converter ready")
+        else:
+            self.logger.info("DocumentProcessor initialized successfully")
     
     def _setup_converter(self):
         """Setup converter following documentation pattern exactly"""
@@ -136,7 +146,10 @@ class DocumentProcessor:
         if file_path.suffix.lower() != '.pdf':
             raise ValueError(f"Only PDF files are supported: {file_path}")
         
-        self.logger.info(f"Processing document: {file_path.name}")
+        if self.enhanced_logger:
+            self.enhanced_logger.document_start(file_path.name, "processing")
+        else:
+            self.logger.info(f"Processing document: {file_path.name}")
         start_time = time.time()
         
         try:
@@ -268,10 +281,16 @@ class DocumentProcessor:
             # Clear GPU cache (following documentation)
             self._clear_gpu_cache()
             
-            self.logger.info(
-                f"Successfully processed {file_path.name}: "
-                f"{len(chunks)} chunks in {processing_time:.2f}s (ID: {document_id})"
-            )
+            if self.enhanced_logger:
+                self.enhanced_logger.document_complete(
+                    file_path.name, processing_time, len(chunks), "processed"
+                )
+                self.enhanced_logger.performance_summary(f"Document processing: {file_path.name}")
+            else:
+                self.logger.info(
+                    f"Successfully processed {file_path.name}: "
+                    f"{len(chunks)} chunks in {processing_time:.2f}s (ID: {document_id})"
+                )
             
             return processed_doc
             
@@ -814,25 +833,37 @@ class DocumentProcessor:
         if not page_markers:
             return 1
         
-        # Find the last page marker that is before or at the current position
+        # page_markers structure:
+        # page_markers[0] = 0 (start of document)
+        # page_markers[1] = position of {0} marker (indicates page 1)
+        # page_markers[2] = position of {1} marker (indicates page 2)
+        # page_markers[3] = position of {2} marker (indicates page 3)
+        # etc.
+        
+        # Default to page 1 for content before any markers
         page = 1
-        for i, marker_pos in enumerate(page_markers):
-            if position >= marker_pos:
-                page = i + 1  # Page numbers are 1-indexed
+        
+        # Check each marker position (skip index 0 which is just document start)
+        for i in range(1, len(page_markers)):
+            if position >= page_markers[i]:
+                # The marker at page_markers[i] indicates page number (i-1)+1 = i
+                # But since Marker uses 0-based indexing for page numbers:
+                # {0} = page 1, {1} = page 2, {2} = page 3, etc.
+                # So marker at index i corresponds to page i
+                page = i
             else:
                 break
         
-        # Ensure reasonable page numbers (1-based, with a reasonable max)
+        # Ensure page is at least 1 and reasonable
         return max(1, min(page, 50))
     
     def _clear_gpu_cache(self):
         """Clear GPU cache (following documentation)"""
         try:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                self.logger.debug("GPU cache cleared")
-        except Exception as e:
-            self.logger.warning(f"Failed to clear GPU cache: {e}")
+            from ..utils.torch_utils import clear_gpu_cache
+            clear_gpu_cache()
+        except ImportError:
+            self.logger.warning("Cannot clear GPU cache - torch_utils not available")
     
     async def batch_process_documents(
         self, 

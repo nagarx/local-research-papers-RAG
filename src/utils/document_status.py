@@ -21,13 +21,14 @@ class DocumentStatusChecker:
         self.config = get_config()
         self.logger = get_logger(__name__)
         
-        # Data paths
-        self.data_dir = Path("data")
-        self.processed_dir = self.data_dir / "processed"
-        self.chroma_dir = self.data_dir / "chroma"
+        # Use config system for paths (not hardcoded)
+        self.data_dir = self.config.storage_paths.data_dir
+        self.processed_dir = self.config.storage_paths.processed_dir
+        self.chroma_dir = self.config.storage_paths.chroma_dir
+        self.embeddings_dir = self.config.storage_paths.embeddings_dir
         self.permanent_docs_file = self.data_dir / "permanent_documents.json"
         
-        # ChromaDB metadata file
+        # ChromaDB metadata file (matches ChromaVectorStore implementation)
         self.chroma_metadata_file = self.chroma_dir / "document_metadata.json"
     
     def get_processed_documents(self) -> List[Dict[str, Any]]:
@@ -46,14 +47,34 @@ class DocumentStatusChecker:
                     with open(metadata_file, 'r', encoding='utf-8') as f:
                         metadata = json.load(f)
                     
-                    processed_docs.append({
+                    # Extract document info with proper field mappings
+                    doc_info = {
                         "document_id": metadata.get("document_id", "unknown"),
                         "filename": metadata.get("original_filename", "unknown"),
                         "processed_at": metadata.get("extracted_at", "unknown"),
                         "text_length": metadata.get("text_length", 0),
-                        "chunks_count": metadata.get("extraction_stats", {}).get("paragraphs", 0),
                         "source": "processed"
-                    })
+                    }
+                    
+                    # Add content hash if available (new feature)
+                    if "content_hash" in metadata:
+                        doc_info["content_hash"] = metadata["content_hash"]
+                    
+                    # Add extraction stats if available
+                    if "extraction_stats" in metadata:
+                        stats = metadata["extraction_stats"]
+                        doc_info["extraction_stats"] = {
+                            "lines": stats.get("lines", 0),
+                            "paragraphs": stats.get("paragraphs", 0),
+                            "characters": stats.get("characters", 0),
+                            "words": stats.get("words", 0)
+                        }
+                    
+                    # Add file format info
+                    doc_info["extraction_format"] = metadata.get("extraction_format", "unknown")
+                    doc_info["image_count"] = metadata.get("image_count", 0)
+                    
+                    processed_docs.append(doc_info)
                     
                 except Exception as e:
                     self.logger.warning(f"Failed to read metadata file {metadata_file}: {e}")
@@ -83,8 +104,10 @@ class DocumentStatusChecker:
                     "document_id": doc_id,
                     "filename": doc_info.get("filename", "unknown"),
                     "processed_at": doc_info.get("processed_at", "unknown"),
+                    "source_path": doc_info.get("source_path", "unknown"),
                     "total_chunks": doc_info.get("total_chunks", 0),
                     "chunk_count": len(doc_info.get("chunk_ids", [])),
+                    "chunk_ids": doc_info.get("chunk_ids", []),
                     "source": "indexed"
                 })
             
@@ -175,6 +198,10 @@ class DocumentStatusChecker:
                     all_documents[doc_id]["status"].append("indexed")
                     all_documents[doc_id]["total_chunks"] = doc["total_chunks"]
                     all_documents[doc_id]["chunk_count"] = doc["chunk_count"]
+                    all_documents[doc_id]["chunk_ids"] = doc["chunk_ids"]
+                    # Update source_path if available
+                    if doc.get("source_path"):
+                        all_documents[doc_id]["source_path"] = doc["source_path"]
                 else:
                     all_documents[doc_id] = {
                         **doc,
@@ -188,6 +215,9 @@ class DocumentStatusChecker:
                     all_documents[doc_id]["status"].append("permanent")
                     all_documents[doc_id]["added_to_permanent"] = doc["added_to_permanent"]
                     all_documents[doc_id]["session_id"] = doc["session_id"]
+                    # Update total_chunks if permanent has more recent info
+                    if doc["total_chunks"] > all_documents[doc_id].get("total_chunks", 0):
+                        all_documents[doc_id]["total_chunks"] = doc["total_chunks"]
                 else:
                     all_documents[doc_id] = {
                         **doc,
@@ -206,6 +236,11 @@ class DocumentStatusChecker:
                 "processed_and_indexed": len([d for d in documents_list if set(d["status"]) == {"processed", "indexed"}]),
                 "all_statuses": len([d for d in documents_list if len(d["status"]) >= 3]),
                 "documents": documents_list,
+                "config_info": {
+                    "processed_dir": str(self.processed_dir),
+                    "chroma_dir": str(self.chroma_dir),
+                    "embeddings_dir": str(self.embeddings_dir)
+                },
                 "timestamp": datetime.utcnow().isoformat()
             }
             
@@ -235,6 +270,14 @@ class DocumentStatusChecker:
             print(f"✅ Processed & Indexed: {status['processed_and_indexed']}")
             print(f"🌟 All Statuses: {status['all_statuses']}")
             print(f"⏰ Generated: {status['timestamp']}")
+            
+            # Show config info
+            if "config_info" in status:
+                print(f"\n🔧 Configuration:")
+                print(f"   Processed Dir: {status['config_info']['processed_dir']}")
+                print(f"   ChromaDB Dir: {status['config_info']['chroma_dir']}")
+                print(f"   Embeddings Dir: {status['config_info']['embeddings_dir']}")
+            
             print()
             
             if show_details and status['documents']:
@@ -254,8 +297,25 @@ class DocumentStatusChecker:
                     print(f"     ID: {doc['document_id']}")
                     print(f"     Processed: {doc.get('processed_at', 'unknown')[:19]}")
                     
+                    # Show content hash if available
+                    if 'content_hash' in doc:
+                        print(f"     Content Hash: {doc['content_hash'][:12]}...")
+                    
+                    # Show extraction format
+                    if 'extraction_format' in doc:
+                        print(f"     Format: {doc['extraction_format']}")
+                    
+                    # Show chunks info
                     if 'total_chunks' in doc:
                         print(f"     Chunks: {doc['total_chunks']}")
+                    
+                    # Show text length
+                    if 'text_length' in doc:
+                        print(f"     Text Length: {doc['text_length']:,} chars")
+                    
+                    # Show image count
+                    if 'image_count' in doc and doc['image_count'] > 0:
+                        print(f"     Images: {doc['image_count']}")
                     
                     if 'added_to_permanent' in doc:
                         print(f"     Added to Permanent: {doc['added_to_permanent'][:19]}")
@@ -283,6 +343,21 @@ class DocumentStatusChecker:
             self.logger.error(f"Error checking document existence: {e}")
             return None
     
+    def check_document_exists_by_hash(self, content_hash: str) -> Optional[Dict[str, Any]]:
+        """Check if a document with the given content hash already exists"""
+        try:
+            status = self.get_all_documents_status()
+            
+            for doc in status.get('documents', []):
+                if doc.get('content_hash') == content_hash:
+                    return doc
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Error checking document existence by hash: {e}")
+            return None
+    
     def get_storage_usage(self) -> Dict[str, Any]:
         """Get storage usage statistics"""
         try:
@@ -308,7 +383,7 @@ class DocumentStatusChecker:
                         
                         if file_path.name.endswith("_metadata.json"):
                             usage["file_counts"]["metadata"] += 1
-                        elif file_path.name.endswith("_raw.md"):
+                        elif "_raw." in file_path.name:  # Support any extension (.md, .html, etc.)
                             usage["file_counts"]["processed"] += 1
             
             # Calculate chroma directory size
@@ -320,9 +395,8 @@ class DocumentStatusChecker:
                         usage["file_counts"]["chroma"] += 1
             
             # Calculate embeddings directory size
-            embeddings_dir = self.data_dir / "embeddings"
-            if embeddings_dir.exists():
-                for file_path in embeddings_dir.rglob("*"):
+            if self.embeddings_dir.exists():
+                for file_path in self.embeddings_dir.rglob("*"):
                     if file_path.is_file():
                         size = file_path.stat().st_size
                         usage["embeddings_dir"] += size
@@ -334,6 +408,37 @@ class DocumentStatusChecker:
             
         except Exception as e:
             self.logger.error(f"Error calculating storage usage: {e}")
+            return {"error": str(e)}
+    
+    def get_duplicate_detection_report(self) -> Dict[str, Any]:
+        """Get report on duplicate documents detected by content hash"""
+        try:
+            processed_docs = self.get_processed_documents()
+            
+            # Group by content hash
+            hash_groups = {}
+            for doc in processed_docs:
+                content_hash = doc.get('content_hash')
+                if content_hash:
+                    if content_hash not in hash_groups:
+                        hash_groups[content_hash] = []
+                    hash_groups[content_hash].append(doc)
+            
+            # Find duplicates
+            duplicates = {h: docs for h, docs in hash_groups.items() if len(docs) > 1}
+            
+            return {
+                "total_documents": len(processed_docs),
+                "documents_with_hash": len([d for d in processed_docs if d.get('content_hash')]),
+                "unique_hashes": len(hash_groups),
+                "duplicate_groups": len(duplicates),
+                "duplicate_documents": sum(len(docs) for docs in duplicates.values()),
+                "duplicates": duplicates,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error generating duplicate detection report: {e}")
             return {"error": str(e)}
 
 
@@ -351,6 +456,16 @@ def main():
         print(f"ChromaDB: {usage['chroma_dir'] / 1024 / 1024:.1f} MB")
         print(f"Embeddings: {usage['embeddings_dir'] / 1024 / 1024:.1f} MB")
         print(f"Total: {usage['total_size'] / 1024 / 1024:.1f} MB")
+    
+    # Show duplicate detection report
+    duplicate_report = checker.get_duplicate_detection_report()
+    if "error" not in duplicate_report:
+        print("\n🔍 Duplicate Detection Report:")
+        print("-" * 30)
+        print(f"Documents with Hash: {duplicate_report['documents_with_hash']}")
+        print(f"Unique Hashes: {duplicate_report['unique_hashes']}")
+        print(f"Duplicate Groups: {duplicate_report['duplicate_groups']}")
+        print(f"Duplicate Documents: {duplicate_report['duplicate_documents']}")
 
 
 if __name__ == "__main__":

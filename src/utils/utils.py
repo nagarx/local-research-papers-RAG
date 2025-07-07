@@ -2,7 +2,7 @@
 Common Utilities
 
 This module provides shared utilities and helper functions used across
-the RAG system components to eliminate code duplication.
+the RAG system components.
 """
 
 import asyncio
@@ -13,10 +13,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union, Tuple
 import logging
-
-# ML/System dependencies
-import torch
-import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
 # Local imports
@@ -87,56 +83,10 @@ class FileUtils:
             return False
 
 
-class GPUUtils:
-    """GPU memory management utilities"""
-    
-    @staticmethod
-    def clear_gpu_cache():
-        """Clear GPU cache if available"""
-        try:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                logger = get_logger(__name__)
-                logger.debug("GPU cache cleared")
-        except Exception as e:
-            logger = get_logger(__name__)
-            logger.warning(f"Failed to clear GPU cache: {e}")
-    
-    @staticmethod
-    def get_gpu_memory_info() -> Dict[str, Any]:
-        """Get GPU memory information"""
-        if not torch.cuda.is_available():
-            return {"available": False}
-        
-        try:
-            device = torch.cuda.current_device()
-            total_memory = torch.cuda.get_device_properties(device).total_memory
-            allocated_memory = torch.cuda.memory_allocated(device)
-            cached_memory = torch.cuda.memory_reserved(device)
-            
-            return {
-                "available": True,
-                "device": device,
-                "total_memory": total_memory,
-                "allocated_memory": allocated_memory,
-                "cached_memory": cached_memory,
-                "free_memory": total_memory - allocated_memory
-            }
-        except Exception as e:
-            logger = get_logger(__name__)
-            logger.warning(f"Failed to get GPU memory info: {e}")
-            return {"available": False, "error": str(e)}
-
-
 # Convenience functions for common operations
 def ensure_directory(path: Union[str, Path]) -> Path:
     """Ensure directory exists"""
     return FileUtils.ensure_directory(path)
-
-
-def clear_gpu_cache():
-    """Clear GPU cache"""
-    GPUUtils.clear_gpu_cache()
 
 
 def clean_text(text: str) -> str:
@@ -165,4 +115,30 @@ async def run_in_thread(operation: callable, *args, **kwargs) -> Any:
     """Run synchronous operation in thread pool"""
     loop = asyncio.get_event_loop()
     with ThreadPoolExecutor(max_workers=1) as executor:
-        return await loop.run_in_executor(executor, operation, *args, **kwargs) 
+        return await loop.run_in_executor(executor, operation, *args, **kwargs)
+
+
+# For backward compatibility, import GPU utilities from torch_utils
+def clear_gpu_cache():
+    """Clear GPU cache - delegates to torch_utils"""
+    try:
+        from .torch_utils import clear_gpu_cache as torch_clear_gpu_cache
+        torch_clear_gpu_cache()
+    except ImportError:
+        logger = get_logger(__name__)
+        logger.warning("Cannot clear GPU cache - torch_utils not available")
+
+
+def get_gpu_memory_info() -> Dict[str, Any]:
+    """Get GPU memory information - delegates to torch_utils"""
+    try:
+        from .torch_utils import get_gpu_memory_info as torch_get_gpu_memory_info
+        return torch_get_gpu_memory_info()
+    except ImportError:
+        logger = get_logger(__name__)
+        logger.warning("Cannot get GPU memory info - torch_utils not available")
+        return {"available": False, "error": "torch_utils not available"}
+
+
+# Removed GPUUtils class - functionality moved to torch_utils
+# This maintains backward compatibility while eliminating duplication 

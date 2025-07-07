@@ -4,18 +4,20 @@ Utils Module
 This module contains utility functions and helpers for the RAG system.
 """
 
-from .utils import (
-    FileUtils, GPUUtils,
-    ensure_directory, clear_gpu_cache, clean_text, get_text_hash, run_in_thread
-)
-from .torch_utils import suppress_torch_warnings, configure_torch_for_production
+# Import only what's needed for console scripts
+from .check_documents import main as check_documents_main
 from .document_status import DocumentStatusChecker
+from .enhanced_logging import (
+    get_enhanced_logger, startup_banner, startup_complete, suppress_noisy_loggers,
+    EnhancedLogger, ProgressTracker, PerformanceMonitor
+)
 
+# Other imports available on-demand to avoid circular imports
 __all__ = [
-    # Utility classes
-    'FileUtils', 'GPUUtils', 'DocumentStatusChecker',
-    # Utility functions
-    'ensure_directory', 'clear_gpu_cache', 'clean_text', 'get_text_hash', 'run_in_thread',
-    # PyTorch utilities
-    'suppress_torch_warnings', 'configure_torch_for_production'
+    # Document status utilities
+    'check_documents_main',
+    'DocumentStatusChecker',
+    # Enhanced logging
+    'get_enhanced_logger', 'startup_banner', 'startup_complete', 'suppress_noisy_loggers',
+    'EnhancedLogger', 'ProgressTracker', 'PerformanceMonitor'
 ]

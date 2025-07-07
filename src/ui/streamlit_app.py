@@ -116,6 +116,15 @@ try:
     except ImportError:
         pass
     
+    # Import enhanced logging
+    try:
+        from src.utils.enhanced_logging import (
+            get_enhanced_logger, startup_banner, startup_complete, suppress_noisy_loggers
+        )
+        suppress_noisy_loggers()
+    except ImportError:
+        pass
+    
     from src.chat import ChatEngine
     from src.config import get_config
     from src.ingestion import get_global_marker_models
@@ -154,6 +163,8 @@ class StreamlitRAGApp:
             st.session_state.conversation_history = []
         if 'processed_documents' not in st.session_state:
             st.session_state.processed_documents = []
+        if 'selected_documents' not in st.session_state:
+            st.session_state.selected_documents = []
         if 'system_stats' not in st.session_state:
             st.session_state.system_stats = {}
         if 'upload_status' not in st.session_state:
@@ -164,6 +175,49 @@ class StreamlitRAGApp:
             st.session_state.current_session_id = None
         if 'session_info' not in st.session_state:
             st.session_state.session_info = None
+            
+    def sync_session_state_with_backend(self):
+        """Synchronize UI session state with backend document status"""
+        try:
+            if not st.session_state.chat_engine:
+                return
+                
+            # Get actual session info from backend
+            session_info = st.session_state.chat_engine.get_session_info()
+            
+            # Get all documents from the system
+            checker = DocumentStatusChecker()
+            status = checker.get_all_documents_status()
+            
+            # Always refresh processed_documents to include both session and permanent docs
+            current_filenames = {doc['filename'] for doc in st.session_state.processed_documents}
+            
+            # Add any missing indexed documents (both session and permanent)
+            for doc in status.get('documents', []):
+                if 'indexed' in doc.get('status', []) and doc['filename'] not in current_filenames:
+                    st.session_state.processed_documents.append({
+                        'filename': doc['filename'],
+                        'total_chunks': doc.get('total_chunks', 0),
+                        'processed_at': doc.get('processed_at', ''),
+                        'storage_type': 'permanent' if 'permanent' in doc.get('status', []) else 'temporary',
+                        'document_id': doc.get('document_id', ''),
+                        'status': doc.get('status', [])
+                    })
+            
+            # Update existing documents with document IDs if missing
+            filename_to_doc_id = {doc['filename']: doc.get('document_id', '') 
+                                for doc in status.get('documents', [])}
+            
+            for doc in st.session_state.processed_documents:
+                if 'document_id' not in doc or not doc['document_id']:
+                    doc['document_id'] = filename_to_doc_id.get(doc['filename'], f"missing_{doc['filename']}")
+            
+            # Update session info
+            st.session_state.session_info = session_info
+            
+        except Exception as e:
+            # Don't show error to user, just log it
+            pass
     
     def render_header(self):
         """Render the main header"""
@@ -220,6 +274,11 @@ class StreamlitRAGApp:
         
         # Document management
         with st.sidebar.expander("📄 Document Management", expanded=False):
+            # Sync button
+            if st.button("🔄 Sync with Backend", key="sync_backend"):
+                self.sync_session_state_with_backend()
+                st.rerun()
+            
             # Document status overview
             if st.button("📋 View All Documents", key="view_all_docs"):
                 self.show_document_status()
@@ -238,6 +297,20 @@ class StreamlitRAGApp:
                     self.clear_session_documents()
             else:
                 st.write("No documents in current session")
+                
+                # Check if there are documents in the backend
+                try:
+                    if st.session_state.chat_engine:
+                        checker = DocumentStatusChecker()
+                        status = checker.get_all_documents_status()
+                        
+                        if status.get('total_documents', 0) > 0:
+                            st.info(f"📚 {status['total_documents']} documents available in system")
+                            if st.button("🔄 Load Documents", key="load_docs_sidebar"):
+                                self.sync_session_state_with_backend()
+                                st.rerun()
+                except Exception:
+                    pass
             
             # Permanent documents management
             if st.button("📚 View Permanent Documents", key="view_permanent"):
@@ -298,15 +371,45 @@ class StreamlitRAGApp:
     
     def initialize_system(self):
         """Initialize the RAG system"""
+        progress_container = st.container()
+        
         with st.spinner("🔄 Initializing RAG system..."):
             try:
+                # Get enhanced logger
+                logger = get_enhanced_logger('streamlit_init')
+                
+                # Display startup banner in logs
+                config = get_config()
+                startup_banner(config.app_name, config.app_version, config.environment)
+                
                 # Clear any previous instance
                 if st.session_state.chat_engine:
+                    logger.processing_start("Cleaning up previous instance")
                     del st.session_state.chat_engine
                 
-                # Initialize new chat engine
-                st.session_state.chat_engine = ChatEngine()
+                # Track initialization progress
+                with progress_container:
+                    init_progress = st.progress(0)
+                    status_text = st.empty()
+                    
+                    status_text.text("🔧 Loading configuration...")
+                    init_progress.progress(20)
+                    
+                    status_text.text("🧠 Initializing components...")
+                    init_progress.progress(40)
+                    
+                    # Initialize new chat engine
+                    logger.processing_start("Initializing ChatEngine")
+                    st.session_state.chat_engine = ChatEngine()
+                    
+                    status_text.text("✅ System ready!")
+                    init_progress.progress(100)
+                    
+                    time.sleep(0.5)  # Brief pause to show completion
+                    init_progress.empty()
+                    status_text.empty()
                 
+                logger.system_ready("RAG System", "All components initialized")
                 st.success("✅ RAG system initialized successfully!")
                 
             except Exception as e:
@@ -323,10 +426,12 @@ class StreamlitRAGApp:
                 
                 st.session_state.models_loaded = True
                 st.success(f"✅ Models loaded in {load_time:.1f}s!")
+                st.rerun()  # Refresh UI to show updated status
                 
             except Exception as e:
                 st.error(f"❌ Failed to load models: {e}")
                 st.session_state.models_loaded = False
+                st.rerun()  # Refresh UI to show error status
     
     def get_available_ollama_models(self) -> List[str]:
         """Get available Ollama models"""
@@ -364,7 +469,7 @@ class StreamlitRAGApp:
             st.error(f"❌ Failed to start session: {e}")
     
     def end_current_session(self):
-        """End the current session"""
+        """End the current session and clean up"""
         try:
             if st.session_state.chat_engine and st.session_state.current_session_id:
                 cleanup_summary = st.session_state.chat_engine.end_session()
@@ -380,10 +485,15 @@ class StreamlitRAGApp:
                 else:
                     st.error(f"❌ Failed to end session: {cleanup_summary['error']}")
                 
-                # Clear session state
+                # Clear session state including document selection
                 st.session_state.current_session_id = None
                 st.session_state.session_info = None
                 st.session_state.processed_documents = []
+                
+                # Clear document selection
+                if 'selected_documents' in st.session_state:
+                    del st.session_state.selected_documents
+                    
                 st.rerun()
             else:
                 st.warning("⚠️ No active session to end")
@@ -531,9 +641,9 @@ class StreamlitRAGApp:
             with col1:
                 st.metric("📄 Total", status['total_documents'])
             with col2:
-                st.metric("🔄 Processed", status['processed_only'] + status['processed_and_indexed'])
+                st.metric("🔄 Processed", status['processed_only'] + status['processed_and_indexed'] + status['all_statuses'])
             with col3:
-                st.metric("🗂️ Indexed", status['indexed_only'] + status['processed_and_indexed'])
+                st.metric("🗂️ Indexed", status['indexed_only'] + status['processed_and_indexed'] + status['all_statuses'])
             with col4:
                 st.metric("💾 Permanent", status['permanent_only'] + status['all_statuses'])
             
@@ -1036,9 +1146,9 @@ class StreamlitRAGApp:
             with col1:
                 st.metric("📄 Total", status['total_documents'])
             with col2:
-                st.metric("🔄 Processed", status['processed_only'] + status['processed_and_indexed'])
+                st.metric("🔄 Processed", status['processed_only'] + status['processed_and_indexed'] + status['all_statuses'])
             with col3:
-                st.metric("🗂️ Indexed", status['indexed_only'] + status['processed_and_indexed'])
+                st.metric("🗂️ Indexed", status['indexed_only'] + status['processed_and_indexed'] + status['all_statuses'])
             with col4:
                 st.metric("💾 Permanent", status['permanent_only'] + status['all_statuses'])
             
@@ -1321,13 +1431,189 @@ class StreamlitRAGApp:
         """Render the chat interface"""
         st.markdown("## 💬 Chat with Documents")
         
+        # Always sync session state with backend to ensure we have current document status
+        self.sync_session_state_with_backend()
+        
+        # Check if documents are available for chat
         if not st.session_state.processed_documents:
-            st.info("📝 Upload and process documents first to start chatting!")
+            # Force a comprehensive check for available documents
+            try:
+                if st.session_state.chat_engine:
+                    checker = DocumentStatusChecker()
+                    status = checker.get_all_documents_status()
+                    
+                    indexed_docs = [doc for doc in status.get('documents', []) if 'indexed' in doc.get('status', [])]
+                    
+                    if indexed_docs:
+                        st.info(f"📚 Found {len(indexed_docs)} indexed documents available for chat!")
+                        
+                        # Force load these documents into session state
+                        st.session_state.processed_documents = []
+                        for doc in indexed_docs:
+                            st.session_state.processed_documents.append({
+                                'filename': doc['filename'],
+                                'total_chunks': doc.get('total_chunks', 0),
+                                'processed_at': doc.get('processed_at', ''),
+                                'storage_type': 'permanent' if 'permanent' in doc.get('status', []) else 'temporary',
+                                'document_id': doc.get('document_id', ''),
+                                'status': doc.get('status', [])
+                            })
+                        
+                        # Show available documents
+                        with st.expander("📋 Available Documents", expanded=True):
+                            for doc in indexed_docs:
+                                storage_icon = "💾" if 'permanent' in doc.get('status', []) else "⏱️"
+                                st.write(f"{storage_icon} **{doc['filename']}** ({doc.get('total_chunks', 0)} chunks)")
+                        
+                        st.success("✅ Documents loaded! You can now chat with them below.")
+                        
+                    else:
+                        st.info("📝 Upload and process documents first to start chatting!")
+                        return
+                else:
+                    st.info("📝 Please initialize the system first.")
+                    return
+            except Exception as e:
+                st.warning(f"⚠️ Error checking for documents: {e}")
+                st.info("📝 Upload and process documents first to start chatting!")
+                return
+        
+        # Show document count
+        if st.session_state.processed_documents:
+            permanent_count = len([doc for doc in st.session_state.processed_documents if doc.get('storage_type') == 'permanent'])
+            session_count = len(st.session_state.processed_documents) - permanent_count
+            
+            if permanent_count > 0 and session_count > 0:
+                st.info(f"💬 Ready to chat with {len(st.session_state.processed_documents)} document(s): {permanent_count} permanent + {session_count} session")
+            elif permanent_count > 0:
+                st.info(f"💬 Ready to chat with {permanent_count} permanent document(s)")
+            else:
+                st.info(f"💬 Ready to chat with {session_count} session document(s)")
+        
+        # Document Selection Section
+        st.markdown("### 📚 Document Selection")
+        
+        # Get all available documents for selection
+        available_documents = []
+        if st.session_state.processed_documents:
+            # Add session documents
+            for doc in st.session_state.processed_documents:
+                available_documents.append({
+                    'id': doc.get('document_id', f"session_{doc['filename']}"),
+                    'filename': doc['filename'],
+                    'chunks': doc.get('total_chunks', 0),
+                    'type': doc.get('storage_type', 'session'),
+                    'source': 'Current Session'
+                })
+        
+        # Also get permanent documents from backend
+        try:
+            if st.session_state.chat_engine:
+                checker = DocumentStatusChecker()
+                status = checker.get_all_documents_status()
+                
+                # Add permanent documents that aren't already in session
+                session_filenames = {doc['filename'] for doc in st.session_state.processed_documents}
+                for doc in status.get('documents', []):
+                    if ('indexed' in doc.get('status', []) and 
+                        'permanent' in doc.get('status', []) and 
+                        doc['filename'] not in session_filenames):
+                        available_documents.append({
+                            'id': doc.get('document_id', f"perm_{doc['filename']}"),
+                            'filename': doc['filename'],
+                            'chunks': doc.get('total_chunks', 0),
+                            'type': 'permanent',
+                            'source': 'Permanent Storage'
+                        })
+        except Exception as e:
+            pass
+        
+        if available_documents:
+            # Initialize selected documents in session state
+            if 'selected_documents' not in st.session_state:
+                st.session_state.selected_documents = [doc['id'] for doc in available_documents]
+            
+            # Validate that selected documents still exist
+            available_doc_ids = {doc['id'] for doc in available_documents}
+            st.session_state.selected_documents = [
+                doc_id for doc_id in st.session_state.selected_documents 
+                if doc_id in available_doc_ids
+            ]
+            
+            # If no valid selections remain, select all
+            if not st.session_state.selected_documents:
+                st.session_state.selected_documents = [doc['id'] for doc in available_documents]
+            
+            # Create selection interface
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                st.markdown("#### Select Documents to Chat With:")
+                
+                # Show selection options
+                for doc in available_documents:
+                    is_selected = doc['id'] in st.session_state.selected_documents
+                    
+                    # Create unique key for each checkbox
+                    checkbox_key = f"select_{doc['id']}"
+                    
+                    # Create checkbox with document info
+                    doc_selected = st.checkbox(
+                        f"📄 **{doc['filename']}** ({doc['chunks']} chunks) - *{doc['source']}*",
+                        value=is_selected,
+                        key=checkbox_key
+                    )
+                    
+                    # Update selection state
+                    if doc_selected and doc['id'] not in st.session_state.selected_documents:
+                        st.session_state.selected_documents.append(doc['id'])
+                    elif not doc_selected and doc['id'] in st.session_state.selected_documents:
+                        st.session_state.selected_documents.remove(doc['id'])
+            
+            with col2:
+                st.markdown("#### Quick Actions:")
+                
+                # Select All button
+                if st.button("✅ Select All", key="select_all_docs"):
+                    st.session_state.selected_documents = [doc['id'] for doc in available_documents]
+                    st.rerun()
+                
+                # Deselect All button
+                if st.button("❌ Deselect All", key="deselect_all_docs"):
+                    st.session_state.selected_documents = []
+                    st.rerun()
+                
+                # Show selection summary
+                selected_count = len(st.session_state.selected_documents)
+                total_chunks = sum(doc['chunks'] for doc in available_documents 
+                                 if doc['id'] in st.session_state.selected_documents)
+                
+                st.markdown(f"**Selected:** {selected_count}/{len(available_documents)} docs")
+                st.markdown(f"**Total Chunks:** {total_chunks}")
+            
+            # Show selected documents summary
+            if st.session_state.selected_documents:
+                selected_docs = [doc for doc in available_documents 
+                               if doc['id'] in st.session_state.selected_documents]
+                
+                selected_names = [doc['filename'] for doc in selected_docs]
+                
+                st.success(f"🎯 **Chat Mode:** Selected {len(selected_docs)} document(s)")
+                st.write(f"📄 **Selected Documents:** {', '.join(selected_names)}")
+                
+            else:
+                st.warning("⚠️ No documents selected. Please select at least one document to chat with.")
+                return
+        else:
+            st.warning("⚠️ No documents available for chat. Please upload and process documents first.")
             return
+        
+        # Chat input section
+        st.markdown("### 💬 Chat")
         
         # Chat input
         user_query = st.text_input(
-            "Ask a question about your documents:",
+            "Ask a question about your selected documents:",
             placeholder="What is the main contribution of this paper?",
             key="chat_input"
         )
@@ -1337,7 +1623,8 @@ class StreamlitRAGApp:
         with col1:
             if st.button("📤 Send", key="send_query"):
                 if user_query.strip():
-                    self.process_chat_query(user_query)
+                    # Pass selected document IDs to the chat query
+                    self.process_chat_query(user_query, st.session_state.selected_documents)
         
         with col2:
             if st.button("🗑️ Clear Chat", key="clear_chat"):
@@ -1373,8 +1660,14 @@ class StreamlitRAGApp:
                                 <em>"{source['text_snippet']}"</em>
                             </div>
                             """, unsafe_allow_html=True)
+                    
+                    # Show which documents were used for this response
+                    if message.get('source_documents'):
+                        st.markdown(f"**🎯 Documents Used:** {', '.join(message['source_documents'])}")
+                    elif message.get('filtered_documents'):
+                        st.markdown(f"**🎯 Filtered to:** {len(message['filtered_documents'])} selected documents")
     
-    def process_chat_query(self, query: str):
+    def process_chat_query(self, query: str, selected_documents: List[str]):
         """Process a chat query using the actual RAG system"""
         if not st.session_state.chat_engine:
             st.error("❌ System not initialized")
@@ -1397,7 +1690,8 @@ class StreamlitRAGApp:
                     st.session_state.chat_engine.query_async(
                         user_query=query,
                         top_k=top_k,
-                        include_conversation_history=True
+                        include_conversation_history=True,
+                        document_ids=selected_documents
                     )
                 )
                 
@@ -1418,6 +1712,8 @@ class StreamlitRAGApp:
                         'role': 'assistant',
                         'content': result['response'],
                         'sources': formatted_sources,
+                        'source_documents': result.get('source_documents', []),
+                        'filtered_documents': result.get('filtered_documents', []),
                         'timestamp': datetime.now().isoformat()
                     })
                     
@@ -1430,6 +1726,8 @@ class StreamlitRAGApp:
                     'role': 'assistant',
                     'content': f"I apologize, but I encountered an error processing your query: {str(e)}",
                     'sources': [],
+                    'source_documents': [],
+                    'filtered_documents': [],
                     'timestamp': datetime.now().isoformat()
                 })
     

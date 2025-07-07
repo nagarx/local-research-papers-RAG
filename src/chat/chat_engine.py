@@ -23,27 +23,68 @@ class ChatEngine:
         self.config = get_config()
         self.logger = get_logger(__name__)
         
-        # Initialize core components
+        # Try to get enhanced logger
+        try:
+            from ..utils.enhanced_logging import get_enhanced_logger
+            self.enhanced_logger = get_enhanced_logger(__name__)
+            startup_time = time.time()
+        except ImportError:
+            self.enhanced_logger = None
+            startup_time = time.time()
+        
+        # Initialize core components with progress tracking
+        if self.enhanced_logger:
+            self.enhanced_logger.startup_stage("Initializing DocumentProcessor")
         self.document_processor = DocumentProcessor()
+        
+        if self.enhanced_logger:
+            self.enhanced_logger.startup_stage("Initializing EmbeddingManager")
         self.embedding_manager = EmbeddingManager()
+        
+        if self.enhanced_logger:
+            self.enhanced_logger.startup_stage("Initializing ChromaVectorStore")
         self.vector_store = ChromaVectorStore()
+        
+        if self.enhanced_logger:
+            self.enhanced_logger.startup_stage("Initializing OllamaClient")
         self.ollama_client = OllamaClient()
+        
+        if self.enhanced_logger:
+            self.enhanced_logger.startup_stage("Initializing SourceTracker")
         self.source_tracker = SourceTracker()
+        
+        if self.enhanced_logger:
+            self.enhanced_logger.startup_stage("Initializing SessionManager")
         self.session_manager = SessionManager()
         
         # Re-register existing documents with source tracker
         try:
+            if self.enhanced_logger:
+                self.enhanced_logger.startup_stage("Re-registering existing documents")
             registered_count = self.vector_store.re_register_existing_documents(self.source_tracker)
             if registered_count > 0:
-                self.logger.info(f"Re-registered {registered_count} existing documents")
+                if self.enhanced_logger:
+                    self.enhanced_logger.system_ready("Document re-registration", f"{registered_count} documents")
+                else:
+                    self.logger.info(f"Re-registered {registered_count} existing documents")
         except Exception as e:
-            self.logger.warning(f"Failed to re-register existing documents: {e}")
+            if self.enhanced_logger:
+                self.enhanced_logger.warning_clean(f"Failed to re-register existing documents: {e}")
+            else:
+                self.logger.warning(f"Failed to re-register existing documents: {e}")
         
         # Conversation state
         self.conversation_history = []
         self.max_history_length = 10
         
-        self.logger.info("ChatEngine initialized successfully")
+        total_startup_time = time.time() - startup_time
+        
+        if self.enhanced_logger:
+            from ..utils.enhanced_logging import startup_complete
+            startup_complete(total_startup_time)
+            self.enhanced_logger.system_ready("ChatEngine", "All components initialized and ready")
+        else:
+            self.logger.info("ChatEngine initialized successfully")
     
     def start_session(self) -> str:
         """Start a new document session"""
@@ -325,7 +366,8 @@ class ChatEngine:
         user_query: str,
         top_k: int = None,
         similarity_threshold: float = None,
-        include_conversation_history: bool = True
+        include_conversation_history: bool = True,
+        document_ids: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Process a user query and generate a response"""
         
@@ -338,23 +380,65 @@ class ChatEngine:
             if similarity_threshold is None:
                 similarity_threshold = self.config.vector_storage.similarity_threshold
             
-            self.logger.info(f"Processing query: {user_query[:100]}...")
+            # Enhanced logging for query processing
+            if self.enhanced_logger:
+                self.enhanced_logger.query_start(user_query)
+                self.enhanced_logger.query_step("Generating query embedding")
+            else:
+                self.logger.info(f"Processing query: {user_query[:100]}...")
+                
+            # Log document filtering if applied
+            if document_ids:
+                self.logger.info(f"Filtering query to {len(document_ids)} specific documents")
             
             # Generate query embedding
             query_embedding = await self.embedding_manager.embed_text_async(user_query)
             
-            # Search for relevant chunks
-            search_results = self.vector_store.search(
-                query_embedding,
-                top_k=top_k,
-                similarity_threshold=similarity_threshold
-            )
+            # Prepare filters for document-specific search
+            search_filters = None
+            if document_ids:
+                # For multiple document IDs, we need to search each one separately
+                # and combine results since ChromaDB doesn't support OR operations directly
+                all_search_results = []
+                
+                for doc_id in document_ids:
+                    doc_filters = {"document_id": doc_id}
+                    doc_results = self.vector_store.search(
+                        query_embedding,
+                        top_k=top_k,
+                        similarity_threshold=similarity_threshold,
+                        filters=doc_filters
+                    )
+                    all_search_results.extend(doc_results)
+                
+                # Sort combined results by similarity and take top_k
+                all_search_results.sort(key=lambda x: x[1], reverse=True)
+                search_results = all_search_results[:top_k]
+                
+                # Log filtered search info
+                if self.enhanced_logger:
+                    self.enhanced_logger.query_step("Searching vector database (filtered)", 
+                                                  f"documents={len(document_ids)}, top_k={top_k}, threshold={similarity_threshold}")
+                else:
+                    self.logger.info(f"Searching {len(document_ids)} documents with top_k={top_k}")
+            else:
+                # Search all documents
+                if self.enhanced_logger:
+                    self.enhanced_logger.query_step("Searching vector database", f"top_k={top_k}, threshold={similarity_threshold}")
+                
+                search_results = self.vector_store.search(
+                    query_embedding,
+                    top_k=top_k,
+                    similarity_threshold=similarity_threshold
+                )
             
             if not search_results:
+                filter_msg = f" in the selected {len(document_ids)} document(s)" if document_ids else ""
                 return {
-                    "response": "I couldn't find any relevant information in the uploaded documents to answer your question.",
+                    "response": f"I couldn't find any relevant information{filter_msg} to answer your question.",
                     "sources": [],
                     "query": user_query,
+                    "filtered_documents": document_ids,
                     "metadata": {
                         "total_sources": 0,
                         "response_time": time.time() - start_time,
@@ -413,19 +497,25 @@ class ChatEngine:
             # Calculate total response time
             total_response_time = time.time() - start_time
             
+            # Get unique document names for display
+            document_names = list(set(source["document_name"] for source in formatted_sources))
+            
             # Prepare final response
             response_data = {
                 "response": llm_response["response"],
                 "sources": formatted_sources,
                 "query": user_query,
                 "context_chunks": context_chunks,
+                "filtered_documents": document_ids,
+                "source_documents": document_names,
                 "metadata": {
                     "total_sources": len(search_results),
                     "response_time": total_response_time,
                     "llm_response_time": llm_response["metadata"]["response_time"],
                     "similarity_scores": [score for _, score, _ in search_results],
                     "timestamp": datetime.utcnow().isoformat(),
-                    "model_used": llm_response["model"]
+                    "model_used": llm_response["model"],
+                    "documents_filtered": len(document_ids) if document_ids else 0
                 }
             }
             
@@ -434,7 +524,12 @@ class ChatEngine:
                 response_data["error"] = llm_response["error"]
                 response_data["error_message"] = llm_response.get("error_message")
             
-            self.logger.info(f"Query processed successfully in {total_response_time:.2f}s")
+            # Enhanced logging for query completion
+            if self.enhanced_logger:
+                self.enhanced_logger.query_complete(total_response_time, len(search_results), 
+                                                  f"LLM: {llm_response['model']}")
+            else:
+                self.logger.info(f"Query processed successfully in {total_response_time:.2f}s")
             return response_data
             
         except Exception as e:
@@ -444,6 +539,7 @@ class ChatEngine:
                 "response": f"I apologize, but I encountered an error while processing your question: {str(e)}",
                 "sources": [],
                 "query": user_query,
+                "filtered_documents": document_ids,
                 "error": True,
                 "error_message": str(e),
                 "metadata": {

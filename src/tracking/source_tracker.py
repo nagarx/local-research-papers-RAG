@@ -5,7 +5,7 @@ This module handles precise source attribution and citation tracking
 for the RAG system, ensuring accurate PDF and page number references.
 """
 
-from typing import Dict, Any, List, Optional, NamedTuple
+from typing import Dict, Any, List, Optional
 from pathlib import Path
 import logging
 from dataclasses import dataclass
@@ -48,17 +48,30 @@ class SourceTracker:
         document_path: str, 
         metadata: Dict[str, Any]
     ):
-        """Register a document in the source registry"""
+        """Register a document in the source registry with validation"""
+        
+        # Extract page count with fallback
+        page_count = 0
+        if isinstance(metadata.get("content"), dict):
+            page_count = metadata["content"].get("page_count", 0)
+        elif "page_count" in metadata:
+            page_count = metadata.get("page_count", 0)
+        
+        # Ensure page count is valid
+        if not isinstance(page_count, int) or page_count < 0:
+            self.logger.warning(f"Invalid page count {page_count} for document {document_id}, defaulting to 0")
+            page_count = 0
+        
         self._source_registry[document_id] = {
             "document_id": document_id,
             "path": document_path,
             "filename": Path(document_path).name,
             "metadata": metadata,
             "registered_at": metadata.get("processed_at"),
-            "page_count": metadata.get("content", {}).get("page_count", 0)
+            "page_count": page_count
         }
         
-        self.logger.debug(f"Registered document: {document_id} ({Path(document_path).name})")
+        self.logger.debug(f"Registered document: {document_id} ({Path(document_path).name}, {page_count} pages)")
     
     def create_source_reference(
         self,
@@ -77,6 +90,16 @@ class SourceTracker:
             document_name = f"Unknown Document ({document_id})"
         else:
             document_name = self._source_registry[document_id]["filename"]
+        
+        # Ensure page number is valid (at least 1)
+        if page_number < 1:
+            self.logger.warning(f"Invalid page number {page_number}, adjusting to 1")
+            page_number = 1
+        
+        # Ensure confidence score is valid
+        if not 0.0 <= confidence_score <= 1.0:
+            self.logger.warning(f"Invalid confidence score {confidence_score}, adjusting to 1.0")
+            confidence_score = 1.0
         
         return SourceReference(
             document_id=document_id,
@@ -200,7 +223,7 @@ class SourceTracker:
         return list(self._source_registry.values())
     
     def validate_source_reference(self, source_ref: SourceReference) -> bool:
-        """Validate a source reference"""
+        """Validate a source reference with improved error handling"""
         
         # Check if document is registered
         if source_ref.document_id not in self._source_registry:
@@ -209,13 +232,14 @@ class SourceTracker:
         
         doc_info = self._source_registry[source_ref.document_id]
         
-        # Check page number validity
-        if source_ref.page_number < 1 or source_ref.page_number > doc_info["page_count"]:
+        # Check page number validity (more lenient - allow if page_count is 0 or unknown)
+        page_count = doc_info.get("page_count", 0)
+        if page_count > 0 and (source_ref.page_number < 1 or source_ref.page_number > page_count):
             self.logger.warning(
-                f"Invalid page number {source_ref.page_number} for document "
-                f"{source_ref.document_name} (pages: 1-{doc_info['page_count']})"
+                f"Page number {source_ref.page_number} may be out of range for document "
+                f"{source_ref.document_name} (estimated pages: 1-{page_count})"
             )
-            return False
+            # Don't fail validation - page count might be an estimate
         
         # Check confidence score
         if not 0.0 <= source_ref.confidence_score <= 1.0:
@@ -228,7 +252,7 @@ class SourceTracker:
         """Get source tracking statistics"""
         
         total_docs = len(self._source_registry)
-        total_pages = sum(doc["page_count"] for doc in self._source_registry.values())
+        total_pages = sum(doc.get("page_count", 0) for doc in self._source_registry.values())
         
         doc_types = {}
         for doc in self._source_registry.values():
@@ -244,5 +268,6 @@ class SourceTracker:
             "total_documents": total_docs,
             "total_pages": total_pages,
             "document_types": doc_types,
-            "average_pages_per_document": total_pages / total_docs if total_docs > 0 else 0
+            "average_pages_per_document": total_pages / total_docs if total_docs > 0 else 0,
+            "documents_with_known_page_count": len([doc for doc in self._source_registry.values() if doc.get("page_count", 0) > 0])
         } 

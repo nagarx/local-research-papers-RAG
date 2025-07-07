@@ -107,17 +107,17 @@ $RECYCLE.BIN/
 data/
 !data/.gitkeep
 
-# Document storage
+# Document storage and uploads
 documents/
 sample_documents/*.pdf
 temp_uploads/
 
-# Vector embeddings and indices
+# Vector embeddings and ChromaDB storage
 embeddings/
 *.npy
-*.faiss
-index/
-vector_index/
+chroma/
+*.chroma
+*.chromadb
 
 # Logs
 logs/
@@ -126,7 +126,13 @@ logs/
 # Cache directories
 cache/
 .cache/
-__pycache__/
+
+# Session storage
+sessions/
+*.session
+
+# Permanent documents registry
+permanent_documents.json
 
 # Model files and weights
 models/
@@ -142,11 +148,11 @@ models/
 # Hugging Face cache
 .cache/huggingface/
 
-# Environment files
+# Environment files (but keep the template)
 .env
 .env.local
 .env.*.local
-env_example.txt
+# Note: env_example.txt is kept as it's a template file
 
 # Configuration files with secrets
 config.local.py
@@ -189,11 +195,9 @@ wandb/
 !requirements.txt
 !setup.py
 !*.md
-!LICENSE 
+!LICENSE
+!env_example.txt
 
-# Vector storage and databases
-*.faiss
+# Database files
 *.db
-*.sqlite*
-chroma/
-*.chroma 
+*.sqlite* 

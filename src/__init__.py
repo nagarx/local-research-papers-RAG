@@ -39,15 +39,10 @@ from .llm import OllamaClient
 from .tracking import SourceTracker
 from .chat import ChatEngine
 
-# Base components
-from .config import BaseStats
+# Utilities
 from .utils import (
-    FileUtils, GPUUtils,
-    ensure_directory, clear_gpu_cache, clean_text, get_text_hash, run_in_thread
-)
-from .config import (
-    RAGSystemError, ConfigurationError, ModelLoadError, DocumentProcessingError,
-    EmbeddingError, VectorStoreError, OllamaError, QueryProcessingError, SourceTrackingError
+    get_enhanced_logger, startup_banner, startup_complete, suppress_noisy_loggers,
+    DocumentStatusChecker, check_documents_main
 )
 
 # Version info
@@ -82,12 +77,7 @@ __all__ = [
     "OllamaClient",
     "SourceTracker",
     "ChatEngine",
-    # Base components
-    "BaseStats",
     # Utilities
-    "FileUtils", "GPUUtils",
-    "ensure_directory", "clear_gpu_cache", "clean_text", "get_text_hash", "run_in_thread",
-    # Exceptions
-    "RAGSystemError", "ConfigurationError", "ModelLoadError", "DocumentProcessingError",
-    "EmbeddingError", "VectorStoreError", "OllamaError", "QueryProcessingError", "SourceTrackingError"
+    "get_enhanced_logger", "startup_banner", "startup_complete", "suppress_noisy_loggers",
+    "DocumentStatusChecker", "check_documents_main"
 ] 

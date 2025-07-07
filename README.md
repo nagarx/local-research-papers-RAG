@@ -74,7 +74,7 @@ If the automated installer doesn't work:
 
 4. **Configure environment**:
    ```bash
-   cp .env.example .env
+   cp env_example.txt .env
    # Edit .env with your preferred settings
    ```
 
