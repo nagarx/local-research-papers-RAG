@@ -207,26 +207,29 @@ class DocumentProcessor:
                                     existing_doc["document_id"]
                                 )
                                 
-                                self.logger.info(f"Regenerated {len(chunks)} chunks from saved text for {file_path.name}")
-                                
-                                return {
-                                    "id": existing_doc["document_id"],
-                                    "source_path": str(file_path),
-                                    "filename": file_path.name,
-                                    "processed_at": existing_doc["extracted_at"],
-                                    "processing_time": 0.0,  # No processing time for existing document
-                                    "status": "already_processed",
-                                    "content_hash": content_hash,
-                                    "raw_text_path": saved_text_data.get("text_file_path"),
-                                    "content": {
-                                        "full_text": saved_text_data["raw_text"],
-                                        "blocks": chunks,  # Regenerated chunks for indexing
-                                        "page_count": existing_doc.get("extraction_stats", {}).get("lines", 0),
-                                        "total_blocks": len(chunks),
-                                        "images": existing_doc.get("images", [])
-                                    },
-                                    "metadata": existing_doc
-                                }
+                                if chunks:  # Only proceed if chunks were successfully generated
+                                    self.logger.info(f"Regenerated {len(chunks)} chunks from saved text for {file_path.name}")
+                                    
+                                    return {
+                                        "id": existing_doc["document_id"],
+                                        "source_path": str(file_path),
+                                        "filename": file_path.name,
+                                        "processed_at": existing_doc["extracted_at"],
+                                        "processing_time": 0.0,  # No processing time for existing document
+                                        "status": "already_processed",
+                                        "content_hash": content_hash,
+                                        "raw_text_path": saved_text_data.get("text_file_path"),
+                                        "content": {
+                                            "full_text": saved_text_data["raw_text"],
+                                            "blocks": chunks,  # Regenerated chunks for indexing
+                                            "page_count": existing_doc.get("extraction_stats", {}).get("lines", 0),
+                                            "total_blocks": len(chunks),
+                                            "images": existing_doc.get("images", [])
+                                        },
+                                        "metadata": existing_doc
+                                    }
+                                else:
+                                    self.logger.warning(f"Failed to regenerate chunks for {file_path.name}, will reprocess")
                             else:
                                 self.logger.warning(f"Could not load raw text for {file_path.name}, will reprocess")
                         except Exception as e:
@@ -272,10 +275,16 @@ class DocumentProcessor:
                         )
                         # Explicit shutdown to prevent resource leaks
                         executor.shutdown(wait=True)
+                    
+                    # Clean up immediately after processing to prevent accumulation
+                    from ..utils.resource_cleanup import cleanup_multiprocessing_resources
+                    cleanup_multiprocessing_resources()
+                    
                 except Exception as e:
                     # Clean up resources on exception
                     from ..utils.resource_cleanup import cleanup_multiprocessing_resources
                     cleanup_multiprocessing_resources()
+                    self._clear_gpu_cache()
                     raise e
                 
                 # Extract text using proper Marker API (following documentation)
@@ -536,61 +545,152 @@ class DocumentProcessor:
     
     def _create_text_chunks(self, text: str, filename: str, document_id: str, rendered=None) -> List[Dict[str, Any]]:
         """Create optimized text chunks for RAG with semantic coherence and proper page attribution"""
-        if not text:
+        if not text or not text.strip():
+            self.logger.warning(f"Empty or whitespace-only text provided for chunking: {filename}")
             return []
         
-        # Extract page breaks from Markdown if available
-        page_markers = self._extract_page_markers(text)
+        if not document_id or not document_id.strip():
+            self.logger.error(f"Invalid document_id provided for chunking: {filename}")
+            return []
         
-        # Configuration
-        chunk_size = self.config.document_processing.max_chunk_size
-        overlap_size = self.config.document_processing.chunk_overlap
-        
-        # Split text into semantic units (sentences/paragraphs)
-        semantic_units = self._split_into_semantic_units(text)
-        
-        chunks = []
-        current_chunk = ""
-        current_chunk_units = []
-        current_position = 0
-        
-        for unit in semantic_units:
-            unit_length = len(unit["text"])
+        try:
+            # Extract page breaks from Markdown if available
+            page_markers = self._extract_page_markers(text)
             
-            # Check if adding this unit would exceed chunk size
-            if (len(current_chunk) + unit_length > chunk_size and 
-                current_chunk.strip() and 
-                len(current_chunk_units) > 0):
+            # Configuration
+            chunk_size = self.config.document_processing.max_chunk_size
+            overlap_size = self.config.document_processing.chunk_overlap
+            
+            # Validate configuration
+            if chunk_size <= 0:
+                self.logger.warning(f"Invalid chunk_size {chunk_size}, using default 1000")
+                chunk_size = 1000
+            
+            if overlap_size < 0:
+                self.logger.warning(f"Invalid overlap_size {overlap_size}, using default 200")
+                overlap_size = 200
+            
+            # Split text into semantic units (sentences/paragraphs)
+            semantic_units = self._split_into_semantic_units(text)
+            
+            if not semantic_units:
+                self.logger.warning(f"No semantic units found in text for {filename}")
+                # Create a single chunk with the entire text as fallback
+                fallback_chunk = {
+                    "id": f"{document_id}_chunk_0",
+                    "text": text.strip()[:chunk_size],  # Truncate if too long
+                    "chunk_index": 0,
+                    "chunk_type": "text",
+                    "page_number": 1,
+                    "block_type": "Text",
+                    "semantic_units": 1,
+                    "has_structural_elements": False,
+                    "source_info": {
+                        "document_id": document_id,
+                        "document_name": filename,
+                        "page_number": 1,
+                        "block_index": 0,
+                        "block_type": "text",
+                        "chunk_type": "text",
+                        "start_position": 0,
+                        "end_position": len(text.strip()[:chunk_size])
+                    }
+                }
+                return [fallback_chunk]
+            
+            chunks = []
+            current_chunk = ""
+            current_chunk_units = []
+            current_position = 0
+            
+            for unit in semantic_units:
+                unit_length = len(unit["text"])
                 
-                # Finalize current chunk
+                # Check if adding this unit would exceed chunk size
+                if (len(current_chunk) + unit_length > chunk_size and 
+                    current_chunk.strip() and 
+                    len(current_chunk_units) > 0):
+                    
+                    # Finalize current chunk
+                    chunk_info = self._finalize_chunk(
+                        current_chunk_units, current_chunk, document_id, filename, 
+                        chunks, page_markers, current_position - len(current_chunk)
+                    )
+                    chunks.append(chunk_info)
+                    
+                    # Start new chunk with overlap
+                    overlap_units, overlap_text = self._create_overlap(current_chunk_units, overlap_size)
+                    current_chunk_units = overlap_units
+                    current_chunk = overlap_text
+                
+                # Add current unit to chunk
+                current_chunk_units.append(unit)
+                current_chunk += unit["text"]
+                current_position += unit_length
+            
+            # Add final chunk if there's content
+            if current_chunk.strip():
                 chunk_info = self._finalize_chunk(
-                    current_chunk_units, current_chunk, document_id, filename, 
+                    current_chunk_units, current_chunk, document_id, filename,
                     chunks, page_markers, current_position - len(current_chunk)
                 )
                 chunks.append(chunk_info)
-                
-                # Start new chunk with overlap
-                overlap_units, overlap_text = self._create_overlap(current_chunk_units, overlap_size)
-                current_chunk_units = overlap_units
-                current_chunk = overlap_text
             
-            # Add current unit to chunk
-            current_chunk_units.append(unit)
-            current_chunk += unit["text"]
-            current_position += unit_length
-        
-        # Add final chunk if there's content
-        if current_chunk.strip():
-            chunk_info = self._finalize_chunk(
-                current_chunk_units, current_chunk, document_id, filename,
-                chunks, page_markers, current_position - len(current_chunk)
-            )
-            chunks.append(chunk_info)
-        
-        # Post-process chunks for quality
-        chunks = self._post_process_chunks(chunks)
-        
-        return chunks
+            # Post-process chunks for quality
+            chunks = self._post_process_chunks(chunks)
+            
+            # Final validation
+            if not chunks:
+                self.logger.warning(f"No chunks created after post-processing for {filename}, creating fallback")
+                # Create a single fallback chunk
+                fallback_chunk = {
+                    "id": f"{document_id}_chunk_0",
+                    "text": text.strip()[:chunk_size],
+                    "chunk_index": 0,
+                    "chunk_type": "text",
+                    "page_number": 1,
+                    "block_type": "Text",
+                    "semantic_units": 1,
+                    "has_structural_elements": False,
+                    "source_info": {
+                        "document_id": document_id,
+                        "document_name": filename,
+                        "page_number": 1,
+                        "block_index": 0,
+                        "block_type": "text",
+                        "chunk_type": "text",
+                        "start_position": 0,
+                        "end_position": len(text.strip()[:chunk_size])
+                    }
+                }
+                chunks = [fallback_chunk]
+            
+            return chunks
+            
+        except Exception as e:
+            self.logger.error(f"Error creating text chunks for {filename}: {e}")
+            # Return fallback chunk in case of error
+            fallback_chunk = {
+                "id": f"{document_id}_chunk_0",
+                "text": text.strip()[:1000] if text else "Error processing document",
+                "chunk_index": 0,
+                "chunk_type": "text",
+                "page_number": 1,
+                "block_type": "Text",
+                "semantic_units": 1,
+                "has_structural_elements": False,
+                "source_info": {
+                    "document_id": document_id,
+                    "document_name": filename,
+                    "page_number": 1,
+                    "block_index": 0,
+                    "block_type": "text",
+                    "chunk_type": "text",
+                    "start_position": 0,
+                    "end_position": len(text.strip()[:1000]) if text else 0
+                }
+            }
+            return [fallback_chunk]
     
     def _split_into_semantic_units(self, text: str) -> List[Dict[str, Any]]:
         """Split text into semantic units (sentences, paragraphs, sections)"""
@@ -807,11 +907,14 @@ class DocumentProcessor:
         else:
             chunk_type = "text"
         
+        # Generate consistent chunk index (will be updated in post-processing if needed)
+        chunk_index = len(existing_chunks)
+        
         # Create chunk info
         chunk = {
-            "id": f"{document_id}_chunk_{len(existing_chunks)}",
+            "id": f"{document_id}_chunk_{chunk_index}",
             "text": text.strip(),
-            "chunk_index": len(existing_chunks),
+            "chunk_index": chunk_index,
             "chunk_type": chunk_type,
             "page_number": page_number,
             "block_type": "Text",  # Keep for compatibility
@@ -821,7 +924,7 @@ class DocumentProcessor:
                 "document_id": document_id,
                 "document_name": filename,
                 "page_number": page_number,
-                "block_index": len(existing_chunks),
+                "block_index": chunk_index,
                 "block_type": "text",
                 "chunk_type": chunk_type,
                 "start_position": chunk_start_position,
@@ -849,15 +952,18 @@ class DocumentProcessor:
                     if len(prev_chunk["text"]) + len(text) < self.config.document_processing.max_chunk_size:
                         prev_chunk["text"] += "\n\n" + text
                         prev_chunk["semantic_units"] += chunk.get("semantic_units", 1)
+                        # Update end position to include merged content
+                        prev_chunk["source_info"]["end_position"] = chunk["source_info"]["end_position"]
                         continue
             
             # Clean up text
             chunk["text"] = self._clean_chunk_text(text)
             
-            # Update indices after any merging
-            chunk["chunk_index"] = len(processed_chunks)
-            chunk["id"] = f"{chunk['source_info']['document_id']}_chunk_{len(processed_chunks)}"
-            chunk["source_info"]["block_index"] = len(processed_chunks)
+            # Update indices after any merging (ensure consistency)
+            final_chunk_index = len(processed_chunks)
+            chunk["chunk_index"] = final_chunk_index
+            chunk["id"] = f"{chunk['source_info']['document_id']}_chunk_{final_chunk_index}"
+            chunk["source_info"]["block_index"] = final_chunk_index
             
             processed_chunks.append(chunk)
         
@@ -909,7 +1015,7 @@ class DocumentProcessor:
     
     def _get_page_number_for_position(self, position: int, page_markers: List[int]) -> int:
         """Determine page number based on character position in text"""
-        if not page_markers:
+        if not page_markers or position < 0:
             return 1
         
         # page_markers structure:
@@ -922,19 +1028,26 @@ class DocumentProcessor:
         # Default to page 1 for content before any markers
         page = 1
         
-        # Check each marker position (skip index 0 which is just document start)
-        for i in range(1, len(page_markers)):
-            if position >= page_markers[i]:
-                # The marker at page_markers[i] indicates page number (i-1)+1 = i
-                # But since Marker uses 0-based indexing for page numbers:
-                # {0} = page 1, {1} = page 2, {2} = page 3, etc.
-                # So marker at index i corresponds to page i
-                page = i
-            else:
-                break
+        try:
+            # Check each marker position (skip index 0 which is just document start)
+            for i in range(1, len(page_markers)):
+                if position >= page_markers[i]:
+                    # The marker at page_markers[i] indicates page number (i-1)+1 = i
+                    # But since Marker uses 0-based indexing for page numbers:
+                    # {0} = page 1, {1} = page 2, {2} = page 3, etc.
+                    # So marker at index i corresponds to page i
+                    page = i
+                else:
+                    break
+            
+            # Ensure page is at least 1 and reasonable (validate bounds)
+            page = max(1, min(page, 1000))  # Cap at 1000 pages for safety
+            
+        except Exception as e:
+            self.logger.warning(f"Error calculating page number for position {position}: {e}")
+            page = 1
         
-        # Ensure page is at least 1 and reasonable
-        return max(1, min(page, 50))
+        return page
     
     def _clear_gpu_cache(self):
         """Clear GPU cache (following documentation)"""

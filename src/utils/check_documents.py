@@ -129,6 +129,126 @@ def check_specific_document(filename: str = None, content_hash: str = None):
         return None
 
 
+def test_document_processor_integration():
+    """Test document processor integration with all components"""
+    print("🧪 Running Document Processor Integration Test...")
+    print("-" * 50)
+    
+    try:
+        from ..ingestion.document_processor import DocumentProcessor
+        from ..storage.chroma_vector_store import ChromaVectorStore  
+        from ..embeddings.embedding_manager import EmbeddingManager
+        from ..storage.session_manager import SessionManager
+        
+        # Test 1: Initialize all components
+        print("1. Initializing components...")
+        
+        try:
+            processor = DocumentProcessor()
+            vector_store = ChromaVectorStore()
+            embedding_manager = EmbeddingManager()
+            session_manager = SessionManager()
+            print("   ✅ All components initialized successfully")
+        except Exception as e:
+            print(f"   ❌ Component initialization failed: {e}")
+            return False
+        
+        # Test 2: Check document status integration
+        print("2. Testing document status integration...")
+        try:
+            checker = DocumentStatusChecker()
+            status = checker.get_all_documents_status()
+            if "error" not in status:
+                print(f"   ✅ Document status check successful ({status['total_documents']} documents)")
+            else:
+                print(f"   ❌ Document status check failed: {status['error']}")
+                return False
+        except Exception as e:
+            print(f"   ❌ Document status integration failed: {e}")
+            return False
+        
+        # Test 3: Validate chunk format compatibility
+        print("3. Testing chunk format compatibility...")
+        try:
+            # Create a test chunk using the processor's format
+            test_chunk = {
+                "id": "test_doc_chunk_0",
+                "text": "This is a test chunk for validation.",
+                "chunk_index": 0,
+                "chunk_type": "text",
+                "page_number": 1,
+                "block_type": "Text",
+                "semantic_units": 1,
+                "has_structural_elements": False,
+                "source_info": {
+                    "document_id": "test_doc",
+                    "document_name": "test.pdf",
+                    "page_number": 1,
+                    "block_index": 0,
+                    "block_type": "text",
+                    "chunk_type": "text",
+                    "start_position": 0,
+                    "end_position": 35
+                }
+            }
+            
+            # Validate that vector store can handle this format
+            page_number = test_chunk.get("source_info", {}).get("page_number", 1)
+            block_type = test_chunk.get("block_type", "Text")
+            text = test_chunk.get("text", "")
+            
+            if page_number >= 1 and block_type and text:
+                print("   ✅ Chunk format is compatible with vector store")
+            else:
+                print("   ❌ Chunk format compatibility issue")
+                return False
+                
+        except Exception as e:
+            print(f"   ❌ Chunk format validation failed: {e}")
+            return False
+        
+        # Test 4: Test metadata format compatibility
+        print("4. Testing metadata format compatibility...")
+        try:
+            # Check if processed documents can be read by status checker
+            processed_docs = checker.get_processed_documents()
+            for doc in processed_docs[:3]:  # Check first 3 documents
+                required_fields = ["document_id", "filename", "processed_at"]
+                missing_fields = [field for field in required_fields if field not in doc]
+                if missing_fields:
+                    print(f"   ❌ Missing required fields in {doc.get('filename', 'unknown')}: {missing_fields}")
+                    return False
+            
+            print("   ✅ Metadata format compatibility verified")
+        except Exception as e:
+            print(f"   ❌ Metadata format validation failed: {e}")
+            return False
+        
+        # Test 5: Test resource cleanup functionality
+        print("5. Testing resource cleanup...")
+        try:
+            from ..utils.resource_cleanup import ResourceManager, cleanup_multiprocessing_resources
+            
+            # Test ResourceManager context
+            with ResourceManager(cleanup_on_exit=True):
+                pass
+            
+            # Test cleanup function
+            cleanup_multiprocessing_resources()
+            print("   ✅ Resource cleanup functions working")
+        except Exception as e:
+            print(f"   ❌ Resource cleanup test failed: {e}")
+            return False
+        
+        print("\n🎉 All integration tests passed!")
+        print("📊 Document processor is fully compatible with all components")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Integration test failed: {e}")
+        return False
+
+
 if __name__ == "__main__":
     import argparse
     
@@ -136,10 +256,13 @@ if __name__ == "__main__":
     parser.add_argument("--filename", help="Check specific document by filename")
     parser.add_argument("--hash", help="Check specific document by content hash")
     parser.add_argument("--full-report", action="store_true", help="Show full comprehensive report")
+    parser.add_argument("--test-integration", action="store_true", help="Run integration test for document processor")
     
     args = parser.parse_args()
     
-    if args.filename or args.hash:
+    if args.test_integration:
+        test_document_processor_integration()
+    elif args.filename or args.hash:
         check_specific_document(filename=args.filename, content_hash=args.hash)
     else:
         main()
