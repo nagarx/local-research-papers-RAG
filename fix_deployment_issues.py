@@ -46,7 +46,9 @@ def install_missing_dependencies(pip_cmd):
     print("\n📦 Installing missing dependencies...")
     
     dependencies = [
-        "plotly>=5.15.0"
+        "plotly>=5.15.0",
+        "aiohttp>=3.8.0",
+        "torch>=2.0.0"
     ]
     
     for dep in dependencies:
@@ -133,6 +135,157 @@ def test_streamlit_specific():
         print(f"   ❌ Streamlit imports failed: {e}")
         return False
 
+def fix_missing_init_files():
+    """Fix missing __init__.py files"""
+    print("\n🔧 Fixing missing __init__.py files...")
+    
+    init_files = {
+        "src/embeddings/__init__.py": '''"""
+Embeddings Module
+
+This module handles embedding generation and management using SentenceTransformers.
+"""
+
+from .embedding_manager import EmbeddingManager
+
+__all__ = ['EmbeddingManager']
+''',
+        "src/config/__init__.py": '''"""
+Configuration Module
+
+This module handles configuration management for the ArXiv RAG system.
+"""
+
+from .config import get_config, Config
+
+__all__ = ['get_config', 'Config']
+''',
+        "src/storage/__init__.py": '''"""
+Storage Module
+
+This module handles vector storage and session management.
+"""
+
+from .chroma_vector_store import ChromaVectorStore
+from .session_manager import SessionManager
+
+__all__ = ['ChromaVectorStore', 'SessionManager']
+''',
+        "src/llm/__init__.py": '''"""
+LLM Module
+
+This module handles local LLM integration using Ollama.
+"""
+
+from .ollama_client import OllamaClient
+
+__all__ = ['OllamaClient']
+''',
+        "src/tracking/__init__.py": '''"""
+Tracking Module
+
+This module handles source tracking and citation management.
+"""
+
+from .source_tracker import SourceTracker, SourceReference
+
+__all__ = ['SourceTracker', 'SourceReference']
+''',
+        "src/ingestion/__init__.py": '''"""
+Ingestion Module
+
+This module handles document processing and ingestion using Marker.
+"""
+
+from .document_processor import DocumentProcessor, get_global_marker_models
+
+__all__ = ['DocumentProcessor', 'get_global_marker_models']
+''',
+        "src/chat/__init__.py": '''"""
+Chat Module
+
+This module handles chat orchestration and query processing for the RAG system.
+"""
+
+from .chat_engine import ChatEngine
+
+__all__ = ['ChatEngine']
+''',
+        "src/utils/__init__.py": '''"""
+Utils Module
+
+This module contains utility functions and classes.
+"""
+
+from .document_status import DocumentStatusChecker
+from .check_documents import main as check_documents_main
+
+try:
+    from .enhanced_logging import (
+        get_enhanced_logger, startup_banner, startup_complete, suppress_noisy_loggers
+    )
+except ImportError:
+    # Fallback if enhanced logging is not available
+    def get_enhanced_logger(name):
+        import logging
+        return logging.getLogger(name)
+    
+    def startup_banner(*args, **kwargs):
+        pass
+    
+    def startup_complete(*args, **kwargs):
+        pass
+    
+    def suppress_noisy_loggers():
+        pass
+
+__all__ = [
+    'DocumentStatusChecker', 
+    'check_documents_main',
+    'get_enhanced_logger', 
+    'startup_banner', 
+    'startup_complete', 
+    'suppress_noisy_loggers'
+]
+''',
+        "src/ui/__init__.py": '''"""
+UI Module
+
+This module contains the Streamlit web interface.
+"""
+
+# UI module - no exports needed
+__all__ = []
+'''
+    }
+    
+    created_files = 0
+    
+    for file_path, content in init_files.items():
+        path = Path(file_path)
+        
+        # Create directory if it doesn't exist
+        path.parent.mkdir(parents=True, exist_ok=True)
+        
+        if not path.exists():
+            try:
+                with open(path, 'w') as f:
+                    f.write(content)
+                print(f"   ✅ Created {path}")
+                created_files += 1
+            except Exception as e:
+                print(f"   ❌ Failed to create {path}: {e}")
+                return False
+        else:
+            print(f"   ✓ {path} (exists)")
+    
+    if created_files > 0:
+        print(f"✅ Created {created_files} missing __init__.py files!")
+    else:
+        print("✅ All __init__.py files already present!")
+    
+    return True
+
 def verify_file_structure():
     """Verify that all necessary files exist"""
     print("\n📁 Verifying file structure...")
@@ -206,28 +359,33 @@ def main():
     # Step 1: Detect environment
     python_cmd, pip_cmd = detect_environment()
     
-    # Step 2: Verify file structure
-    if not verify_file_structure():
-        print("\n❌ Critical files are missing. Please ensure you have the complete repository.")
+    # Step 2: Fix missing __init__.py files
+    if not fix_missing_init_files():
+        print("\n❌ Failed to create missing __init__.py files.")
         return 1
     
-    # Step 3: Install dependencies
+    # Step 3: Verify file structure
+    if not verify_file_structure():
+        print("\n❌ Critical files are still missing. Please ensure you have the complete repository.")
+        return 1
+    
+    # Step 4: Install dependencies
     if not install_missing_dependencies(pip_cmd):
         print("\n❌ Failed to install dependencies. Try running manually:")
-        print("   pip install plotly>=5.15.0")
+        print("   pip install plotly>=5.15.0 aiohttp>=3.8.0 torch>=2.0.0")
         return 1
     
-    # Step 4: Test imports
+    # Step 5: Test imports
     if not test_imports():
         print("\n❌ Import tests failed. Check the error messages above.")
         return 1
     
-    # Step 5: Test Streamlit compatibility
+    # Step 6: Test Streamlit compatibility
     if not test_streamlit_specific():
         print("\n❌ Streamlit compatibility test failed.")
         return 1
     
-    # Step 6: Create launcher
+    # Step 7: Create launcher
     if not create_launcher_script():
         print("\n⚠️  Launcher script creation failed, but core issues are fixed.")
     

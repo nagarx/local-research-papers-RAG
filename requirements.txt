@@ -5,6 +5,7 @@ marker-pdf>=0.2.0
 ollama>=0.1.0
 
 # Embedding and vector operations
+torch>=2.0.0
 sentence-transformers>=2.2.0
 chromadb>=0.4.0
 
@@ -40,6 +41,7 @@ python-dateutil>=2.8.0
 
 # HTTP requests
 requests>=2.31.0
+aiohttp>=3.8.0
 
 # Text processing
 nltk>=3.8.0
