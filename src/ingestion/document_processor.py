@@ -35,6 +35,22 @@ from marker.models import create_model_dict
 from marker.config.parser import ConfigParser
 from marker.output import text_from_rendered
 
+# CRITICAL: Configure multiprocessing to prevent semaphore leaks
+import multiprocessing
+
+# Force spawn method on all platforms to prevent semaphore issues
+if multiprocessing.get_start_method(allow_none=True) != 'spawn':
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass  # Already set
+
+# Set environment variables to limit workers and prevent resource leaks
+os.environ['MARKER_MAX_WORKERS'] = '1'
+os.environ['MARKER_PARALLEL_FACTOR'] = '1'
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+
 # Local imports
 from ..config import get_config, get_logger
 
@@ -113,6 +129,11 @@ class DocumentProcessor:
             "use_llm": False,            # No LLM for speed
             "force_ocr": False,          # Don't force OCR unless needed
             "disable_tqdm": True,        # No progress bars
+            # CRITICAL: Force single-worker operation to prevent semaphore leaks
+            "workers": 1,                # Explicit single worker
+            "max_workers": 1,            # Maximum 1 worker
+            "parallel_factor": 1,        # No parallelism
+            "batch_size": 1,             # Single document batch
         }
         
         # Only enable LLM if configured and API key available
@@ -962,9 +983,9 @@ class DocumentProcessor:
                     
                     # Clean up multiprocessing resources between batches
                     cleanup_multiprocessing_resources()
-                    
-                    # Small delay between batches
-                    await asyncio.sleep(0.1)
+                
+                # Small delay between batches
+                await asyncio.sleep(0.1)
                 
             except Exception as e:
                 self.logger.error(f"Batch {batch_num} processing failed: {e}")
