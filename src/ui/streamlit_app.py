@@ -19,9 +19,17 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 import logging
 from datetime import datetime
-import plotly.express as px
-import plotly.graph_objects as go
 import pandas as pd
+
+# Optional plotly imports for analytics
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    px = None
+    go = None
+    PLOTLY_AVAILABLE = False
 
 # Configure Streamlit page
 st.set_page_config(
@@ -1772,15 +1780,24 @@ class StreamlitRAGApp:
             df = pd.DataFrame(st.session_state.processed_documents)
             df['processed_at'] = pd.to_datetime(df['processed_at'])
             
-            fig = px.bar(
-                df,
-                x='filename',
-                y='total_chunks',
-                title='Chunks per Document',
-                labels={'total_chunks': 'Number of Chunks', 'filename': 'Document'}
-            )
-            fig.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig, use_container_width=True)
+            if PLOTLY_AVAILABLE:
+                # Use plotly for interactive charts
+                fig = px.bar(
+                    df,
+                    x='filename',
+                    y='total_chunks',
+                    title='Chunks per Document',
+                    labels={'total_chunks': 'Number of Chunks', 'filename': 'Document'}
+                )
+                fig.update_layout(xaxis_tickangle=-45)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                # Fallback to simple bar chart using streamlit
+                st.info("📊 Install plotly for interactive charts: `pip install plotly>=5.15.0`")
+                st.bar_chart(
+                    data=df.set_index('filename')['total_chunks'],
+                    height=400
+                )
     
     def run(self):
         """Run the Streamlit application"""
