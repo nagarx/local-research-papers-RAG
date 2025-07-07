@@ -9,7 +9,7 @@ An intelligent RAG (Retrieval-Augmented Generation) system designed specifically
 - 📄 **Advanced Document Understanding**: Powered by Marker for superior text extraction
 - 🎯 **Precise Source Attribution**: Exact PDF and page number citations
 - 💬 **Interactive Chat Interface**: Streamlit-based user-friendly interface
-- 📚 **Persistent Storage**: JSON-based vector storage with FAISS indexing
+- 📚 **Persistent Storage**: ChromaDB-based vector storage for efficient retrieval
 - 🔍 **Semantic Search**: Intelligent context retrieval for accurate answers
 
 ## Quick Start
@@ -39,7 +39,11 @@ An intelligent RAG (Retrieval-Augmented Generation) system designed specifically
 
 3. **Launch the application**:
    ```bash
+   # Full launcher with system checks and setup
    python run.py
+   
+   # Simple launcher (if dependencies already installed)
+   python app.py
    ```
 
 4. **Access the interface**:
@@ -80,6 +84,14 @@ If the automated installer doesn't work:
 2. **Wait for Processing**: The system will process and index your documents
 3. **Start Chatting**: Use the "Chat" page to ask questions about your documents
 4. **View Sources**: Each answer includes precise citations with PDF names and page numbers
+
+## Vector Storage
+
+The system uses **ChromaDB** for efficient vector storage and retrieval:
+- **Persistent storage**: Documents are stored locally in ChromaDB collections
+- **Similarity search**: Cosine similarity for accurate document retrieval
+- **Metadata filtering**: Filter searches by document, page number, or other criteria
+- **Scalable**: Handles thousands of documents efficiently
 
 ## Sample Papers Included
 

@@ -58,7 +58,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "arxiv-rag=ui.main:main",
+            "arxiv-rag=src.ui.streamlit_app:main",
         ],
     },
     include_package_data=True,

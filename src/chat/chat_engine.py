@@ -10,7 +10,7 @@ from datetime import datetime
 from ..config import get_config, get_logger
 from ..ingestion import DocumentProcessor
 from ..embeddings import EmbeddingManager
-from ..storage import VectorStore
+from ..storage import ChromaVectorStore
 from ..llm import OllamaClient
 from ..tracking import SourceTracker, SourceReference
 
@@ -26,12 +26,17 @@ class ChatEngine:
         # Initialize core components
         self.document_processor = DocumentProcessor()
         self.embedding_manager = EmbeddingManager()
-        self.vector_store = VectorStore()
+        self.vector_store = ChromaVectorStore()
         self.ollama_client = OllamaClient()
         self.source_tracker = SourceTracker()
         
         # Re-register existing documents with source tracker
-        self.vector_store.re_register_existing_documents(self.source_tracker)
+        try:
+            registered_count = self.vector_store.re_register_existing_documents(self.source_tracker)
+            if registered_count > 0:
+                self.logger.info(f"Re-registered {registered_count} existing documents")
+        except Exception as e:
+            self.logger.warning(f"Failed to re-register existing documents: {e}")
         
         # Conversation state
         self.conversation_history = []
@@ -42,9 +47,10 @@ class ChatEngine:
     async def add_documents_async(
         self, 
         file_paths: List[str],
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
+        force_reprocess: bool = False
     ) -> Dict[str, Any]:
-        """Add multiple documents to the RAG system"""
+        """Add multiple documents to the RAG system with duplicate detection"""
         
         start_time = time.time()
         
@@ -53,21 +59,34 @@ class ChatEngine:
             
             # Process documents with Marker
             if progress_callback:
-                progress_callback("Processing documents with Marker...", 0, len(file_paths))
+                progress_callback("Checking for existing documents...", 0, len(file_paths))
             
             processed_docs = []
+            skipped_docs = []
+            
             for i, file_path in enumerate(file_paths):
                 try:
                     if progress_callback:
                         progress_callback(f"Processing {file_path}...", i + 1, len(file_paths))
                     
-                    processed_doc = await self.document_processor.process_document_async(file_path)
-                    processed_docs.append(processed_doc)
+                    processed_doc = await self.document_processor.process_document_async(
+                        file_path, 
+                        force_reprocess=force_reprocess
+                    )
+                    
+                    # Check if document was already processed
+                    if processed_doc.get("status") == "already_processed":
+                        skipped_docs.append(processed_doc)
+                        self.logger.info(f"Skipped already processed document: {processed_doc['filename']}")
+                    else:
+                        processed_docs.append(processed_doc)
+                        self.logger.info(f"Newly processed document: {processed_doc['filename']}")
+                        
                 except Exception as e:
                     self.logger.error(f"Failed to process {file_path}: {e}")
                     continue
             
-            if not processed_docs:
+            if not processed_docs and not skipped_docs:
                 return {
                     "success": False,
                     "error": "No documents were successfully processed",
@@ -77,16 +96,25 @@ class ChatEngine:
             
             total_chunks = 0
             successful_docs = 0
+            failed_indexing = []
             
-            # Process each document
+            # Process each newly processed document for indexing
             for doc_idx, processed_doc in enumerate(processed_docs):
                 try:
                     if progress_callback:
                         progress_callback(
-                            f"Embedding document {doc_idx + 1}/{len(processed_docs)}...", 
-                            doc_idx, 
-                            len(processed_docs)
+                            f"Indexing document {doc_idx + 1}/{len(processed_docs)}...", 
+                            len(skipped_docs) + doc_idx, 
+                            len(file_paths)
                         )
+                    
+                    # Check if document is already indexed
+                    existing_indexed = self.vector_store.get_document_info(processed_doc["id"])
+                    if existing_indexed and not force_reprocess:
+                        self.logger.info(f"Document already indexed: {processed_doc['filename']}")
+                        successful_docs += 1
+                        total_chunks += existing_indexed.get("total_chunks", 0)
+                        continue
                     
                     # Extract text chunks
                     chunks = processed_doc["content"]["blocks"]
@@ -94,6 +122,10 @@ class ChatEngine:
                     
                     if not chunk_texts:
                         self.logger.warning(f"No text chunks found in {processed_doc['filename']}")
+                        failed_indexing.append({
+                            "filename": processed_doc['filename'],
+                            "reason": "No text chunks found"
+                        })
                         continue
                     
                     # Generate embeddings for chunks
@@ -118,12 +150,95 @@ class ChatEngine:
                         successful_docs += 1
                         total_chunks += len(chunks)
                         
-                        self.logger.info(f"Successfully added {processed_doc['filename']} with {len(chunks)} chunks")
+                        self.logger.info(f"Successfully indexed {processed_doc['filename']} with {len(chunks)} chunks")
                     else:
                         self.logger.error(f"Failed to add {processed_doc['filename']} to vector store")
+                        failed_indexing.append({
+                            "filename": processed_doc['filename'],
+                            "reason": "Vector store insertion failed"
+                        })
                 
                 except Exception as e:
-                    self.logger.error(f"Error processing document {processed_doc.get('filename', 'unknown')}: {e}")
+                    self.logger.error(f"Error indexing document {processed_doc.get('filename', 'unknown')}: {e}")
+                    failed_indexing.append({
+                        "filename": processed_doc.get('filename', 'unknown'),
+                        "reason": str(e)
+                    })
+                    continue
+            
+            # Handle already processed documents
+            for processed_doc in skipped_docs:
+                try:
+                    # Check if already indexed
+                    existing_indexed = self.vector_store.get_document_info(processed_doc["id"])
+                    if existing_indexed:
+                        successful_docs += 1
+                        total_chunks += existing_indexed.get("total_chunks", 0)
+                        self.logger.info(f"Document already indexed: {processed_doc['filename']}")
+                    else:
+                        # Document was processed but not indexed - attempt to index it
+                        self.logger.info(f"Document processed but not indexed, attempting to index: {processed_doc['filename']}")
+                        
+                        # Check if we have regenerated chunks from DocumentProcessor
+                        chunks = processed_doc.get("content", {}).get("blocks", [])
+                        if chunks:
+                            # We have chunks - attempt to index them
+                            chunk_texts = [chunk["text"] for chunk in chunks if chunk["text"].strip()]
+                            
+                            if chunk_texts:
+                                try:
+                                    # Generate embeddings for chunks
+                                    embeddings = await self.embedding_manager.embed_texts_batch_async(chunk_texts)
+                                    
+                                    # Add to vector store
+                                    success = self.vector_store.add_document(
+                                        document_id=processed_doc["id"],
+                                        chunks=chunks,
+                                        embeddings=embeddings,
+                                        metadata=processed_doc
+                                    )
+                                    
+                                    if success:
+                                        # Register with source tracker
+                                        self.source_tracker.register_document(
+                                            processed_doc["id"],
+                                            processed_doc["source_path"],
+                                            processed_doc
+                                        )
+                                        
+                                        successful_docs += 1
+                                        total_chunks += len(chunks)
+                                        
+                                        self.logger.info(f"Successfully indexed orphaned document {processed_doc['filename']} with {len(chunks)} chunks")
+                                    else:
+                                        self.logger.error(f"Failed to add orphaned document {processed_doc['filename']} to vector store")
+                                        failed_indexing.append({
+                                            "filename": processed_doc['filename'],
+                                            "reason": "Vector store insertion failed for orphaned document"
+                                        })
+                                
+                                except Exception as e:
+                                    self.logger.error(f"Error indexing orphaned document {processed_doc['filename']}: {e}")
+                                    failed_indexing.append({
+                                        "filename": processed_doc['filename'],
+                                        "reason": f"Indexing error for orphaned document: {str(e)}"
+                                    })
+                            else:
+                                self.logger.warning(f"No valid text chunks found for orphaned document: {processed_doc['filename']}")
+                                failed_indexing.append({
+                                    "filename": processed_doc['filename'],
+                                    "reason": "No valid text chunks found for orphaned document"
+                                })
+                        else:
+                            # No chunks available - this is the old behavior
+                            self.logger.warning(f"Document processed but not indexed (no chunks available): {processed_doc['filename']}")
+                            failed_indexing.append({
+                                "filename": processed_doc['filename'],
+                                "reason": "Processed but not indexed (no chunks available)"
+                            })
+                
+                except Exception as e:
+                    self.logger.error(f"Error checking indexed status for {processed_doc.get('filename', 'unknown')}: {e}")
                     continue
             
             processing_time = time.time() - start_time
@@ -133,7 +248,10 @@ class ChatEngine:
                 "total_documents": successful_docs,
                 "total_chunks": total_chunks,
                 "processing_time": processing_time,
-                "failed_documents": len(file_paths) - successful_docs,
+                "newly_processed": len(processed_docs),
+                "already_processed": len(skipped_docs),
+                "failed_indexing": len(failed_indexing),
+                "failed_indexing_details": failed_indexing,
                 "message": f"Successfully processed {successful_docs} documents with {total_chunks} chunks"
             }
             
@@ -391,7 +509,7 @@ class ChatEngine:
                 "conversation_length": len(self.conversation_history)
             },
             "document_processor": self.document_processor.get_processing_stats(),
-            "embedding_manager": self.embedding_manager.get_stats(),
+            "embedding_manager": self.embedding_manager.get_embedding_stats(),
             "vector_store": self.vector_store.get_stats(),
             "ollama_client": {
                 "model": self.config.ollama.model,

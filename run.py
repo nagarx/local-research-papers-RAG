@@ -76,7 +76,7 @@ def check_dependencies():
         "marker",
         "ollama", 
         "sentence_transformers",
-        "faiss"
+        "chromadb"
     ]
     
     missing_packages = []
@@ -140,7 +140,7 @@ def launch_streamlit():
         
         subprocess.run([
             sys.executable, "-m", "streamlit", "run",
-            "src/ui/main.py",
+            "src/ui/streamlit_app.py",
             "--server.port", "8501",
             "--server.address", "localhost",
             "--server.headless", "true",

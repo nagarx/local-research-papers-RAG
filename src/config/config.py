@@ -88,25 +88,41 @@ class VectorStorageConfig(BaseSettings):
     """Vector storage configuration"""
     
     storage_type: str = Field(
-        default="json_faiss",
+        default="chromadb",
         env="VECTOR_STORAGE_TYPE",
         description="Vector storage backend type"
     )
-    faiss_index_type: str = Field(
-        default="IndexFlatIP",
-        env="FAISS_INDEX_TYPE",
-        description="FAISS index type"
+    collection_name: str = Field(
+        default="arxiv_papers",
+        env="CHROMA_COLLECTION_NAME",
+        description="ChromaDB collection name"
+    )
+    persist_directory: str = Field(
+        default="./data/chroma",
+        env="CHROMA_PERSIST_DIR",
+        description="ChromaDB persistence directory"
     )
     similarity_threshold: float = Field(
         default=0.3,
         env="SIMILARITY_THRESHOLD",
         description="Minimum similarity score for retrieval"
     )
+    distance_function: str = Field(
+        default="cosine",
+        env="CHROMA_DISTANCE_FUNCTION",
+        description="Distance function for similarity (cosine, l2, ip)"
+    )
     
     @validator('similarity_threshold')
     def validate_similarity_threshold(cls, v):
         if not 0.0 <= v <= 1.0:
             raise ValueError('Similarity threshold must be between 0.0 and 1.0')
+        return v
+    
+    @validator('distance_function')
+    def validate_distance_function(cls, v):
+        if v not in ['cosine', 'l2', 'ip']:
+            raise ValueError('Distance function must be one of: cosine, l2, ip')
         return v
 
 
@@ -202,10 +218,10 @@ class StoragePathsConfig(BaseSettings):
         env="EMBEDDINGS_DIR",
         description="Embeddings storage directory"
     )
-    index_dir: Path = Field(
-        default=Path("./data/index"),
-        env="INDEX_DIR",
-        description="Vector index storage directory"
+    chroma_dir: Path = Field(
+        default=Path("./data/chroma"),
+        env="CHROMA_DIR",
+        description="ChromaDB vector storage directory"
     )
     cache_dir: Path = Field(
         default=Path("./data/cache"),
@@ -346,6 +362,7 @@ class Config(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+        extra = "ignore"  # Allow extra fields and ignore them instead of forbidding
         
     def setup_logging(self):
         """Setup application logging"""
