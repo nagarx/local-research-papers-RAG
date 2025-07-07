@@ -36,17 +36,34 @@ An intelligent RAG (Retrieval-Augmented Generation) system designed specifically
    # macOS/Linux
    chmod +x install.sh && ./install.sh
    ```
-
-3. **Launch the application**:
-   ```bash
-   # Full launcher with system checks and setup
-   python run.py
    
-   # Simple launcher (if dependencies already installed)
-   python app.py
+   The installer will:
+   - Check and install Python 3.10+ if needed
+   - Install Ollama automatically
+   - Create a virtual environment
+   - Install all Python dependencies
+   - Download the required AI model
+   - Set up directories and configuration
+   - Run verification tests
+
+3. **Verify installation** (optional but recommended):
+   ```bash
+   python verify_installation.py
    ```
 
-4. **Access the interface**:
+4. **Launch the application**:
+   ```bash
+   # Windows - Use the launcher
+   start_rag.bat
+   
+   # macOS/Linux - Use the launcher
+   ./start_rag.sh
+   
+   # Or manual launch with system checks
+   python run.py
+   ```
+
+5. **Access the interface**:
    Open your browser to `http://localhost:8501`
 
 ## Manual Installation
@@ -112,7 +129,26 @@ The package includes 10+ carefully selected ArXiv research papers covering:
 
 ## Troubleshooting
 
-See [docs/troubleshooting.md](docs/troubleshooting.md) for common issues and solutions.
+### Quick Fixes
+
+**Installation Issues:**
+- Run `python verify_installation.py` to diagnose problems
+- Ensure Python 3.10+ is installed and in PATH
+- Make sure Ollama is installed from https://ollama.ai
+
+**Common Problems:**
+- **Port 8501 in use**: Use `python run.py --port 8502` or kill existing process
+- **Memory errors**: Reduce batch size in configuration or close other applications
+- **Permission errors**: Run installer as administrator (Windows) or fix file permissions
+- **Slow processing**: Ensure you have sufficient RAM and use SSD if possible
+- **Python not found**: Install Python 3.10+ from python.org and ensure it's in PATH
+- **Ollama issues**: Install from https://ollama.ai and run `ollama serve` to start service
+- **Package install fails**: Upgrade pip with `python -m pip install --upgrade pip`
+
+**Getting Help:**
+- Run `python verify_installation.py` for comprehensive diagnostics
+- Check logs in `data/logs/` directory
+- Review the troubleshooting section above for common solutions
 
 ## License
 
