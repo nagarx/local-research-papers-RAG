@@ -159,155 +159,168 @@ class DocumentProcessor:
             self.logger.info(f"Processing document: {file_path.name}")
         start_time = time.time()
         
+        # Use resource manager for proper cleanup
+        from ..utils.resource_cleanup import ResourceManager
+        
         try:
-            # Calculate content hash for duplicate detection
-            content_hash = self._calculate_file_hash(file_path)
-            if not content_hash:
-                raise ValueError(f"Failed to calculate content hash for {file_path}")
-            
-            # Check for existing document by content hash (most reliable)
-            if not force_reprocess:
-                existing_doc = self._find_existing_document_by_hash(content_hash)
-                if existing_doc:
-                    self.logger.info(f"Document already processed (content hash match): {file_path.name}")
-                    
-                    # Load the saved raw text and regenerate chunks for indexing
-                    try:
-                        saved_text_data = self.get_saved_raw_text(existing_doc["document_id"], file_path.name)
-                        if saved_text_data and saved_text_data["raw_text"]:
-                            # Regenerate chunks from saved text
-                            chunks = self._create_text_chunks(
-                                saved_text_data["raw_text"], 
-                                file_path.name, 
-                                existing_doc["document_id"]
-                            )
-                            
-                            self.logger.info(f"Regenerated {len(chunks)} chunks from saved text for {file_path.name}")
-                            
-                            return {
-                                "id": existing_doc["document_id"],
-                                "source_path": str(file_path),
-                                "filename": file_path.name,
-                                "processed_at": existing_doc["extracted_at"],
-                                "processing_time": 0.0,  # No processing time for existing document
-                                "status": "already_processed",
-                                "content_hash": content_hash,
-                                "raw_text_path": saved_text_data.get("text_file_path"),
-                                "content": {
-                                    "full_text": saved_text_data["raw_text"],
-                                    "blocks": chunks,  # Regenerated chunks for indexing
-                                    "page_count": existing_doc.get("extraction_stats", {}).get("lines", 0),
-                                    "total_blocks": len(chunks),
-                                    "images": existing_doc.get("images", [])
-                                },
-                                "metadata": existing_doc
-                            }
-                        else:
-                            self.logger.warning(f"Could not load raw text for {file_path.name}, will reprocess")
-                    except Exception as e:
-                        self.logger.warning(f"Failed to regenerate chunks for {file_path.name}: {e}, will reprocess")
-                    
-                    # Fallback: return minimal info if chunk regeneration fails
-                    return {
-                        "id": existing_doc["document_id"],
-                        "source_path": str(file_path),
-                        "filename": file_path.name,
-                        "processed_at": existing_doc["extracted_at"],
-                        "processing_time": 0.0,  # No processing time for existing document
-                        "status": "already_processed",
-                        "content_hash": content_hash,
-                        "raw_text_path": existing_doc.get("text_file"),
-                        "content": {
-                            "full_text": "",  # Can be loaded on demand
-                            "blocks": [],     # Would need to be regenerated if needed
-                            "page_count": 0,
-                            "total_blocks": 0,
-                            "images": []
-                        },
-                        "metadata": existing_doc
-                    }
+            with ResourceManager(cleanup_on_exit=True):
+                # Calculate content hash for duplicate detection
+                content_hash = self._calculate_file_hash(file_path)
+                if not content_hash:
+                    raise ValueError(f"Failed to calculate content hash for {file_path}")
                 
-                # Fallback: check by filename
-                existing_doc = self._find_existing_document_by_filename(file_path.name)
-                if existing_doc:
-                    self.logger.warning(f"Found document with same filename but different content: {file_path.name}")
-            
-            # Generate content-based document ID
-            document_id = self._generate_content_based_document_id(content_hash, file_path.name)
-            
-            # Process with Marker in thread pool (async wrapper)
-            loop = asyncio.get_event_loop()
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                rendered = await loop.run_in_executor(
-                    executor,
-                    self._process_with_marker_sync,
-                    str(file_path)
+                # Check for existing document by content hash (most reliable)
+                if not force_reprocess:
+                    existing_doc = self._find_existing_document_by_hash(content_hash)
+                    if existing_doc:
+                        self.logger.info(f"Document already processed (content hash match): {file_path.name}")
+                        
+                        # Load the saved raw text and regenerate chunks for indexing
+                        try:
+                            saved_text_data = self.get_saved_raw_text(existing_doc["document_id"], file_path.name)
+                            if saved_text_data and saved_text_data["raw_text"]:
+                                # Regenerate chunks from saved text
+                                chunks = self._create_text_chunks(
+                                    saved_text_data["raw_text"], 
+                                    file_path.name, 
+                                    existing_doc["document_id"]
+                                )
+                                
+                                self.logger.info(f"Regenerated {len(chunks)} chunks from saved text for {file_path.name}")
+                                
+                                return {
+                                    "id": existing_doc["document_id"],
+                                    "source_path": str(file_path),
+                                    "filename": file_path.name,
+                                    "processed_at": existing_doc["extracted_at"],
+                                    "processing_time": 0.0,  # No processing time for existing document
+                                    "status": "already_processed",
+                                    "content_hash": content_hash,
+                                    "raw_text_path": saved_text_data.get("text_file_path"),
+                                    "content": {
+                                        "full_text": saved_text_data["raw_text"],
+                                        "blocks": chunks,  # Regenerated chunks for indexing
+                                        "page_count": existing_doc.get("extraction_stats", {}).get("lines", 0),
+                                        "total_blocks": len(chunks),
+                                        "images": existing_doc.get("images", [])
+                                    },
+                                    "metadata": existing_doc
+                                }
+                            else:
+                                self.logger.warning(f"Could not load raw text for {file_path.name}, will reprocess")
+                        except Exception as e:
+                            self.logger.warning(f"Failed to regenerate chunks for {file_path.name}: {e}, will reprocess")
+                        
+                        # Fallback: return minimal info if chunk regeneration fails
+                        return {
+                            "id": existing_doc["document_id"],
+                            "source_path": str(file_path),
+                            "filename": file_path.name,
+                            "processed_at": existing_doc["extracted_at"],
+                            "processing_time": 0.0,  # No processing time for existing document
+                            "status": "already_processed",
+                            "content_hash": content_hash,
+                            "raw_text_path": existing_doc.get("text_file"),
+                            "content": {
+                                "full_text": "",  # Can be loaded on demand
+                                "blocks": [],     # Would need to be regenerated if needed
+                                "page_count": 0,
+                                "total_blocks": 0,
+                                "images": []
+                            },
+                            "metadata": existing_doc
+                        }
+                    
+                    # Fallback: check by filename
+                    existing_doc = self._find_existing_document_by_filename(file_path.name)
+                    if existing_doc:
+                        self.logger.warning(f"Found document with same filename but different content: {file_path.name}")
+                
+                # Generate content-based document ID
+                document_id = self._generate_content_based_document_id(content_hash, file_path.name)
+                
+                # Process with Marker in thread pool with enhanced resource management
+                loop = asyncio.get_event_loop()
+                rendered = None
+                try:
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        rendered = await loop.run_in_executor(
+                            executor,
+                            self._process_with_marker_sync,
+                            str(file_path)
+                        )
+                        # Explicit shutdown to prevent resource leaks
+                        executor.shutdown(wait=True)
+                except Exception as e:
+                    # Clean up resources on exception
+                    from ..utils.resource_cleanup import cleanup_multiprocessing_resources
+                    cleanup_multiprocessing_resources()
+                    raise e
+                
+                # Extract text using proper Marker API (following documentation)
+                try:
+                    text, ext, images = text_from_rendered(rendered)
+                    self.logger.info(f"Extracted: {len(text)} chars, {len(images)} images")
+                except Exception as e:
+                    self.logger.warning(f"text_from_rendered failed, using fallback: {e}")
+                    text, ext, images = self._fallback_extraction(rendered)
+                
+                # Save raw extracted text before processing (with content hash)
+                raw_text_path = self._save_raw_extracted_text_enhanced(
+                    text, ext, images, document_id, file_path.name, content_hash
                 )
-                # Explicit shutdown to prevent resource leaks
-                executor.shutdown(wait=True)
-            
-            # Extract text using proper Marker API (following documentation)
-            try:
-                text, ext, images = text_from_rendered(rendered)
-                self.logger.info(f"Extracted: {len(text)} chars, {len(images)} images")
-            except Exception as e:
-                self.logger.warning(f"text_from_rendered failed, using fallback: {e}")
-                text, ext, images = self._fallback_extraction(rendered)
-            
-            # Save raw extracted text before processing (with content hash)
-            raw_text_path = self._save_raw_extracted_text_enhanced(
-                text, ext, images, document_id, file_path.name, content_hash
-            )
-            
-            processing_time = time.time() - start_time
-            
-            # Split text into chunks for RAG with proper page attribution
-            chunks = self._create_text_chunks(text, file_path.name, document_id, rendered)
-            
-            processed_doc = {
-                "id": document_id,
-                "source_path": str(file_path),
-                "filename": file_path.name,
-                "processed_at": datetime.utcnow().isoformat(),
-                "processing_time": processing_time,
-                "content_hash": content_hash,
-                "status": "newly_processed",
-                "raw_text_path": str(raw_text_path) if raw_text_path else None,
-                "content": {
-                    "full_text": text,
-                    "blocks": chunks,  # Simple chunks for RAG
-                    "page_count": getattr(rendered, 'page_count', 0) if hasattr(rendered, 'page_count') else 0,
-                    "total_blocks": len(chunks),
-                    "images": images
-                },
-                "metadata": getattr(rendered, 'metadata', {})
-            }
-            
-            # Update statistics
-            self._processing_stats["total_processed"] += 1
-            self._processing_stats["processing_time"] += processing_time
-            
-            # Clear GPU cache (following documentation)
-            self._clear_gpu_cache()
-            
-            if self.enhanced_logger:
-                self.enhanced_logger.document_complete(
-                    file_path.name, processing_time, len(chunks), "processed"
-                )
-                self.enhanced_logger.performance_summary(f"Document processing: {file_path.name}")
-            else:
-                self.logger.info(
-                    f"Successfully processed {file_path.name}: "
-                    f"{len(chunks)} chunks in {processing_time:.2f}s (ID: {document_id})"
-                )
-            
-            return processed_doc
-            
+                
+                processing_time = time.time() - start_time
+                
+                # Split text into chunks for RAG with proper page attribution
+                chunks = self._create_text_chunks(text, file_path.name, document_id, rendered)
+                
+                processed_doc = {
+                    "id": document_id,
+                    "source_path": str(file_path),
+                    "filename": file_path.name,
+                    "processed_at": datetime.utcnow().isoformat(),
+                    "processing_time": processing_time,
+                    "content_hash": content_hash,
+                    "status": "newly_processed",
+                    "raw_text_path": str(raw_text_path) if raw_text_path else None,
+                    "content": {
+                        "full_text": text,
+                        "blocks": chunks,  # Simple chunks for RAG
+                        "page_count": getattr(rendered, 'page_count', 0) if hasattr(rendered, 'page_count') else 0,
+                        "total_blocks": len(chunks),
+                        "images": images
+                    },
+                    "metadata": getattr(rendered, 'metadata', {})
+                }
+                
+                # Update statistics
+                self._processing_stats["total_processed"] += 1
+                self._processing_stats["processing_time"] += processing_time
+                
+                # Clear GPU cache (following documentation)
+                self._clear_gpu_cache()
+                
+                if self.enhanced_logger:
+                    self.enhanced_logger.document_complete(
+                        file_path.name, processing_time, len(chunks), "processed"
+                    )
+                    self.enhanced_logger.performance_summary(f"Document processing: {file_path.name}")
+                else:
+                    self.logger.info(
+                        f"Successfully processed {file_path.name}: "
+                        f"{len(chunks)} chunks in {processing_time:.2f}s (ID: {document_id})"
+                    )
+                
+                return processed_doc
+                
         except Exception as e:
             self._processing_stats["total_errors"] += 1
             self.logger.error(f"Error processing {file_path.name}: {e}")
             
-            # Clear GPU cache on error
+            # Clean up resources on error
+            from ..utils.resource_cleanup import cleanup_multiprocessing_resources
+            cleanup_multiprocessing_resources()
             self._clear_gpu_cache()
             raise
     
@@ -917,6 +930,8 @@ class DocumentProcessor:
         progress_callback: Optional[callable] = None
     ) -> List[Dict[str, Any]]:
         """Process multiple documents efficiently (following documentation patterns)"""
+        from ..utils.resource_cleanup import ResourceManager, cleanup_multiprocessing_resources
+        
         results = []
         
         for i in range(0, len(file_paths), batch_size):
@@ -930,26 +945,31 @@ class DocumentProcessor:
                 progress_callback(f"Processing batch {batch_num}/{total_batches}", i, len(file_paths))
             
             try:
-                batch_results = []
-                for file_path in batch:
-                    try:
-                        result = await self.process_document_async(file_path)
-                        batch_results.append(result)
-                    except Exception as e:
-                        self.logger.error(f"Failed to process {file_path}: {e}")
-                        continue
-                
-                results.extend(batch_results)
-                
-                # Clear GPU cache between batches (documentation recommendation)
-                self._clear_gpu_cache()
-                
-                # Small delay between batches
-                await asyncio.sleep(0.1)
+                with ResourceManager(cleanup_on_exit=True):
+                    batch_results = []
+                    for file_path in batch:
+                        try:
+                            result = await self.process_document_async(file_path)
+                            batch_results.append(result)
+                        except Exception as e:
+                            self.logger.error(f"Failed to process {file_path}: {e}")
+                            continue
+                    
+                    results.extend(batch_results)
+                    
+                    # Clear GPU cache between batches (documentation recommendation)
+                    self._clear_gpu_cache()
+                    
+                    # Clean up multiprocessing resources between batches
+                    cleanup_multiprocessing_resources()
+                    
+                    # Small delay between batches
+                    await asyncio.sleep(0.1)
                 
             except Exception as e:
                 self.logger.error(f"Batch {batch_num} processing failed: {e}")
                 self._clear_gpu_cache()
+                cleanup_multiprocessing_resources()
                 continue
         
         return results
