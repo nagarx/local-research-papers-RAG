@@ -283,17 +283,38 @@ main() {
             # Update package manager
             if command_exists apt; then
                 sudo apt update
-                sudo apt install -y curl wget git build-essential
+                sudo apt install -y curl wget git build-essential \
+                    python3-dev python3-pip python3-venv \
+                    libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libfontconfig1 libxrender1 \
+                    poppler-utils tesseract-ocr tesseract-ocr-eng \
+                    libmagic1 libmagic-dev
             elif command_exists yum; then
-                sudo yum install -y curl wget git gcc gcc-c++ make
+                sudo yum install -y curl wget git gcc gcc-c++ make \
+                    python3-devel python3-pip python3-venv \
+                    mesa-libGL glib2 libSM libXext fontconfig libXrender \
+                    poppler-utils tesseract tesseract-langpack-eng \
+                    file-devel
             elif command_exists dnf; then
-                sudo dnf install -y curl wget git gcc gcc-c++ make
+                sudo dnf install -y curl wget git gcc gcc-c++ make \
+                    python3-devel python3-pip python3-venv \
+                    mesa-libGL glib2 libSM libXext fontconfig libXrender \
+                    poppler-utils tesseract tesseract-langpack-eng \
+                    file-devel
             fi
             ;;
         "macos")
             # Install Xcode command line tools if needed
             if ! command_exists git; then
                 xcode-select --install
+            fi
+            
+            # Install system dependencies for marker-pdf
+            if command_exists brew; then
+                brew install poppler tesseract
+            else
+                print_warning "Homebrew not found - some features may not work optimally"
+                print_info "Install Homebrew from https://brew.sh then run:"
+                print_info "  brew install poppler tesseract"
             fi
             ;;
     esac

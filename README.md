@@ -16,9 +16,11 @@ An intelligent RAG (Retrieval-Augmented Generation) system designed specifically
 
 ### Prerequisites
 
-- Python 3.10 or higher
-- 8GB+ RAM (recommended for large document collections)
-- Ollama installed and running
+- **Python**: 3.10 or higher with pip
+- **Memory**: 8GB+ RAM (4GB minimum, recommended for large document collections)
+- **Storage**: 5GB+ free space (for models and processed documents)
+- **Ollama**: Local LLM service (installed automatically by installer)
+- **System Dependencies**: Build tools and libraries (installed automatically)
 
 ### Installation
 
@@ -46,9 +48,13 @@ An intelligent RAG (Retrieval-Augmented Generation) system designed specifically
    - Set up directories and configuration
    - Run verification tests
 
-3. **Verify installation** (optional but recommended):
+3. **Verify installation** (recommended):
    ```bash
+   # Quick verification
    python verify_installation.py
+   
+   # Comprehensive test (recommended for job interview)
+   python test_installation.py
    ```
 
 4. **Launch the application**:
@@ -86,7 +92,7 @@ If the automated installer doesn't work:
 3. **Install and setup Ollama**:
    ```bash
    # Install Ollama (see https://ollama.ai)
-   ollama pull llama3.1:8b
+   ollama pull llama3.2:latest
    ```
 
 4. **Configure environment**:

@@ -75,6 +75,13 @@ if !errorlevel! == 0 (
 )
 goto :eof
 
+:install_system_dependencies
+call :print_info "Installing system dependencies for marker-pdf..."
+call :print_info "On Windows, marker-pdf dependencies are typically installed via Python packages"
+call :print_info "If you encounter issues, you may need to install Visual Studio Build Tools"
+call :print_info "from: https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022"
+goto :eof
+
 :install_python
 call :print_info "Please install Python 3.10+ from python.org"
 call :print_info "Opening Python download page..."
@@ -264,6 +271,9 @@ call :check_admin
 
 REM Check Python
 call :check_python
+
+REM Install system dependencies
+call :install_system_dependencies
 
 REM Check Ollama
 call :check_ollama

@@ -64,7 +64,7 @@ class InstallationVerifier:
         """Check if required packages are installed"""
         required_packages = [
             ("streamlit", "streamlit"),
-            ("marker", "marker"),
+            ("marker-pdf", "marker"),
             ("ollama", "ollama"),
             ("sentence_transformers", "sentence_transformers"),
             ("chromadb", "chromadb"),
@@ -305,6 +305,8 @@ class InstallationVerifier:
     
     def test_basic_functionality(self) -> bool:
         """Test basic functionality"""
+        all_passed = True
+        
         try:
             # Test vector store creation
             from src.storage.chroma_vector_store import ChromaVectorStore
@@ -321,11 +323,24 @@ class InstallationVerifier:
             except:
                 pass
             
-            return True
-            
         except Exception as e:
             self.log_result("Vector Store", False, f"Error: {e}")
-            return False
+            all_passed = False
+        
+        try:
+            # Test marker-pdf functionality
+            from marker.models import create_model_dict
+            from marker.converters.pdf import PdfConverter
+            
+            # Try to create marker models (this validates installation)
+            models = create_model_dict()
+            self.log_result("Marker Models", True, "Can create marker models")
+            
+        except Exception as e:
+            self.log_result("Marker Models", False, f"Error: {e}")
+            all_passed = False
+        
+        return all_passed
     
     def run_all_tests(self) -> Dict[str, Any]:
         """Run all verification tests"""

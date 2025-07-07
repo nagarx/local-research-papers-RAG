@@ -196,32 +196,30 @@ def setup_environment():
 def check_dependencies():
     """Check if required packages are installed"""
     required_packages = [
-        "streamlit",
-        "marker",
-        "ollama", 
-        "sentence_transformers",
-        "chromadb",
-        "pandas",
-        "numpy",
-        "pydantic",
-        "python-dotenv",
-        "aiofiles"
+        ("streamlit", "streamlit"),
+        ("marker-pdf", "marker"),
+        ("ollama", "ollama"),
+        ("sentence-transformers", "sentence_transformers"),
+        ("chromadb", "chromadb"),
+        ("pandas", "pandas"),
+        ("numpy", "numpy"),
+        ("pydantic", "pydantic"),
+        ("python-dotenv", "dotenv"),
+        ("aiofiles", "aiofiles"),
+        ("beautifulsoup4", "bs4"),
+        ("requests", "requests"),
+        ("tqdm", "tqdm"),
+        ("loguru", "loguru"),
+        ("psutil", "psutil")
     ]
     
     missing_packages = []
     
-    for package in required_packages:
+    for package_name, import_name in required_packages:
         try:
-            # Handle special package name mappings
-            import_name = package.replace("-", "_")
-            if package == "marker":
-                import_name = "marker"
-            elif package == "python-dotenv":
-                import_name = "dotenv"
-            
             __import__(import_name)
         except ImportError:
-            missing_packages.append(package)
+            missing_packages.append(package_name)
     
     if missing_packages:
         print(f"❌ Missing packages: {', '.join(missing_packages)}")
