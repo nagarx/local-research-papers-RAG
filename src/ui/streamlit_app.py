@@ -119,6 +119,7 @@ try:
     from src.chat import ChatEngine
     from src.config import get_config
     from src.ingestion import get_global_marker_models
+    from src.utils import DocumentStatusChecker
     
     # Store import success
     IMPORTS_SUCCESSFUL = True
@@ -159,6 +160,10 @@ class StreamlitRAGApp:
             st.session_state.upload_status = {}
         if 'models_loaded' not in st.session_state:
             st.session_state.models_loaded = False
+        if 'current_session_id' not in st.session_state:
+            st.session_state.current_session_id = None
+        if 'session_info' not in st.session_state:
+            st.session_state.session_info = None
     
     def render_header(self):
         """Render the main header"""
@@ -194,19 +199,49 @@ class StreamlitRAGApp:
             if st.button("📦 Pre-load Models", key="load_models"):
                 self.preload_models()
         
+        # Session management
+        with st.sidebar.expander("📁 Session Management", expanded=True):
+            # Current session info
+            if st.session_state.current_session_id:
+                st.markdown(f"**Current Session:** `{st.session_state.current_session_id[:8]}...`")
+                
+                if st.session_state.session_info:
+                    session_info = st.session_state.session_info
+                    st.write(f"📄 Documents: {session_info['document_count']}")
+                    st.write(f"⏱️ Temporary: {session_info['temporary_count']}")
+                    st.write(f"💾 Permanent: {session_info['permanent_count']}")
+                
+                if st.button("🔚 End Session", key="end_session"):
+                    self.end_current_session()
+            else:
+                st.write("No active session")
+                if st.button("🚀 Start New Session", key="start_session"):
+                    self.start_new_session()
+        
         # Document management
         with st.sidebar.expander("📄 Document Management", expanded=False):
+            # Document status overview
+            if st.button("📋 View All Documents", key="view_all_docs"):
+                self.show_document_status()
+            
+            # Current session documents
             if st.session_state.processed_documents:
-                st.write(f"📊 {len(st.session_state.processed_documents)} documents processed")
+                st.write(f"📊 {len(st.session_state.processed_documents)} documents in session")
                 
-                # Show document list
+                # Show document list with storage types
                 for doc in st.session_state.processed_documents:
-                    st.write(f"• {doc['filename']} ({doc['total_chunks']} chunks)")
+                    storage_type = doc.get('storage_type', 'unknown')
+                    icon = "💾" if storage_type == 'permanent' else "⏱️"
+                    st.write(f"{icon} {doc['filename']} ({doc['total_chunks']} chunks)")
                 
-                if st.button("🗑️ Clear All Documents", key="clear_docs"):
-                    self.clear_documents()
+                if st.button("🗑️ Clear Session Documents", key="clear_docs"):
+                    self.clear_session_documents()
             else:
-                st.write("No documents processed yet")
+                st.write("No documents in current session")
+            
+            # Permanent documents management
+            if st.button("📚 View Permanent Documents", key="view_permanent"):
+                self.show_permanent_documents()
         
         # System configuration
         with st.sidebar.expander("⚙️ Configuration", expanded=False):
@@ -311,17 +346,727 @@ class StreamlitRAGApp:
         except Exception as e:
             st.error(f"❌ Failed to update model: {e}")
     
-    def clear_documents(self):
-        """Clear all processed documents"""
+    def start_new_session(self):
+        """Start a new document session"""
         try:
             if st.session_state.chat_engine:
-                # Clear vector store
-                st.session_state.chat_engine.vector_store.clear()
+                session_id = st.session_state.chat_engine.start_session()
+                if session_id:
+                    st.session_state.current_session_id = session_id
+                    st.session_state.session_info = st.session_state.chat_engine.get_session_info()
+                    st.success(f"✅ Started new session: {session_id[:8]}...")
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to start session")
+            else:
+                st.error("❌ Please initialize the system first")
+        except Exception as e:
+            st.error(f"❌ Failed to start session: {e}")
+    
+    def end_current_session(self):
+        """End the current session"""
+        try:
+            if st.session_state.chat_engine and st.session_state.current_session_id:
+                cleanup_summary = st.session_state.chat_engine.end_session()
+                
+                if "error" not in cleanup_summary:
+                    st.success(f"✅ Session ended successfully!")
+                    st.info(f"📊 Cleanup Summary:\n"
+                           f"• Temporary documents removed: {cleanup_summary['temporary_docs_removed']}\n"
+                           f"• Permanent documents kept: {cleanup_summary['permanent_docs_kept']}")
+                    
+                    if cleanup_summary.get('errors'):
+                        st.warning(f"⚠️ Some errors occurred: {cleanup_summary['errors']}")
+                else:
+                    st.error(f"❌ Failed to end session: {cleanup_summary['error']}")
+                
+                # Clear session state
+                st.session_state.current_session_id = None
+                st.session_state.session_info = None
                 st.session_state.processed_documents = []
-                st.success("✅ All documents cleared!")
+                st.rerun()
+            else:
+                st.warning("⚠️ No active session to end")
+        except Exception as e:
+            st.error(f"❌ Failed to end session: {e}")
+    
+    def clear_session_documents(self):
+        """Clear current session documents"""
+        try:
+            if st.session_state.chat_engine and st.session_state.current_session_id:
+                # End current session (which clears temporary docs)
+                self.end_current_session()
+            else:
+                st.warning("⚠️ No active session")
+        except Exception as e:
+            st.error(f"❌ Failed to clear session documents: {e}")
+    
+    def show_permanent_documents(self):
+        """Show permanent documents management interface"""
+        try:
+            if st.session_state.chat_engine:
+                permanent_docs = st.session_state.chat_engine.get_permanent_documents()
+                
+                if permanent_docs:
+                    st.markdown("### 💾 Permanent Documents")
+                    
+                    for doc in permanent_docs:
+                        col1, col2, col3 = st.columns([3, 1, 1])
+                        
+                        with col1:
+                            st.write(f"📄 **{doc['filename']}**")
+                            # Get chunk count from ChromaDB if available
+                            if st.session_state.chat_engine:
+                                doc_info = st.session_state.chat_engine.vector_store.get_document_info(doc['document_id'])
+                                actual_chunks = doc_info.get('total_chunks', 0) if doc_info else 0
+                                st.write(f"Chunks: {actual_chunks} | Added: {doc['added_to_permanent'][:10]}")
+                            else:
+                                st.write(f"Chunks: {doc['total_chunks']} | Added: {doc['added_to_permanent'][:10]}")
+                        
+                        with col2:
+                            if st.button("🔄 Reload", key=f"reload_{doc['document_id']}"):
+                                st.info("Reload functionality coming soon...")
+                        
+                        with col3:
+                            if st.button("🗑️ Delete", key=f"delete_{doc['document_id']}"):
+                                with st.spinner(f"Deleting {doc['filename']}..."):
+                                    try:
+                                        success = st.session_state.chat_engine.remove_permanent_document(doc['document_id'])
+                                        if success:
+                                            st.success(f"✅ Deleted {doc['filename']}")
+                                            # Force refresh after successful deletion
+                                            time.sleep(1)
+                                            st.rerun()
+                                        else:
+                                            st.error(f"❌ Failed to delete {doc['filename']}")
+                                    except Exception as delete_error:
+                                        st.error(f"❌ Error deleting {doc['filename']}: {str(delete_error)}")
+                        
+                        st.divider()
+                else:
+                    st.info("📭 No permanent documents found")
+            else:
+                st.error("❌ Please initialize the system first")
+                
+        except Exception as e:
+            st.error(f"❌ Failed to load permanent documents: {e}")
+            st.exception(e)
+    
+    def render_document_management_section(self):
+        """Render the always-visible document management section"""
+        st.markdown("## 📚 Document Management")
+        
+        # Add refresh and management controls
+        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+        
+        with col1:
+            st.markdown("*Manage your indexed documents and their storage*")
+        
+        with col2:
+            if st.button("🔄 Refresh", key="refresh_doc_management"):
+                self._force_complete_refresh()
+                st.rerun()
+        
+        with col3:
+            if st.button("📊 System Status", key="doc_system_status"):
+                self.show_document_status()
+                
+        # Add a comprehensive cleanup button for debugging
+        st.expander("🔧 Advanced Operations", expanded=False)
+        with st.expander("🔧 Advanced Operations", expanded=False):
+            st.warning("⚠️ Advanced operations - use with caution!")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🧹 Force Complete Cache Clear", key="force_cache_clear"):
+                    self._force_complete_refresh()
+                    st.success("✅ All document caches cleared")
+                    st.rerun()
+                    
+            with col2:
+                if st.button("🔄 Reload Document Data", key="reload_doc_data"):
+                    # Force reload all document data
+                    self._force_complete_refresh()
+                    st.success("✅ Document data reloaded")
+                    st.rerun()
+        
+        with col4:
+            # Auto-refresh toggle
+            auto_refresh = st.checkbox("⏱️ Auto-refresh", key="auto_refresh_docs")
+            if auto_refresh:
+                # Automatically refresh every 30 seconds
+                import time
+                time.sleep(30)
+                st.rerun()
+        
+        # Create tabs for different views
+        tab1, tab2, tab3 = st.tabs(["📄 All Documents", "💾 Permanent Documents", "⏱️ Session Documents"])
+        
+        with tab1:
+            self.render_all_documents_view()
+        
+        with tab2:
+            self.render_permanent_documents_view()
+        
+        with tab3:
+            self.render_session_documents_view()
+    
+    def render_all_documents_view(self):
+        """Render view of all documents in the system"""
+        try:
+            if not st.session_state.chat_engine:
+                st.warning("⚠️ Please initialize the system first to view documents")
+                return
+            
+            # Get comprehensive document status
+            checker = DocumentStatusChecker()
+            status = checker.get_all_documents_status()
+            
+            if "error" in status:
+                st.error(f"❌ Error getting document status: {status['error']}")
+                return
+            
+            # Summary metrics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("📄 Total", status['total_documents'])
+            with col2:
+                st.metric("🔄 Processed", status['processed_only'] + status['processed_and_indexed'])
+            with col3:
+                st.metric("🗂️ Indexed", status['indexed_only'] + status['processed_and_indexed'])
+            with col4:
+                st.metric("💾 Permanent", status['permanent_only'] + status['all_statuses'])
+            
+            # Document list
+            if status['documents']:
+                # Add search and filter controls
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    search_term = st.text_input("🔍 Search documents", 
+                                              placeholder="Search by filename...",
+                                              key="search_all_docs")
+                
+                with col2:
+                    filter_status = st.selectbox("Filter by status", 
+                                               options=["All", "Processed", "Indexed", "Permanent"],
+                                               key="filter_all_docs")
+                
+                st.markdown("#### 📋 Document List (Newest to Oldest)")
+                
+                # Sort documents by processing time (newest first)
+                sorted_docs = sorted(status['documents'], 
+                                   key=lambda x: x.get('processed_at', ''), 
+                                   reverse=True)
+                
+                # Apply search and filter
+                filtered_docs = []
+                for doc in sorted_docs:
+                    # Apply search filter
+                    if search_term and search_term.lower() not in doc['filename'].lower():
+                        continue
+                    
+                    # Apply status filter
+                    if filter_status != "All":
+                        if filter_status.lower() not in [s.lower() for s in doc.get('status', [])]:
+                            continue
+                    
+                    filtered_docs.append(doc)
+                
+                if filtered_docs:
+                    st.info(f"📊 Showing {len(filtered_docs)} of {len(sorted_docs)} documents")
+                    
+                    for doc in filtered_docs:
+                        self.render_document_card(doc, show_actions=True)
+                else:
+                    st.info("📭 No documents match your search criteria")
+            else:
+                st.info("📭 No documents found in the system")
+                
+        except Exception as e:
+            st.error(f"❌ Failed to load documents: {e}")
+            st.exception(e)
+    
+    def render_permanent_documents_view(self):
+        """Render view of permanent documents only"""
+        try:
+            if not st.session_state.chat_engine:
+                st.warning("⚠️ Please initialize the system first to view permanent documents")
+                return
+            
+            permanent_docs = st.session_state.chat_engine.get_permanent_documents()
+            
+            if permanent_docs:
+                # Add search control
+                search_term = st.text_input("🔍 Search permanent documents", 
+                                          placeholder="Search by filename...",
+                                          key="search_permanent_docs")
+                
+                st.markdown("#### 💾 Permanent Documents (Newest to Oldest)")
+                
+                # Sort by added_to_permanent date (newest first)
+                sorted_docs = sorted(permanent_docs, 
+                                   key=lambda x: x.get('added_to_permanent', ''), 
+                                   reverse=True)
+                
+                # Apply search filter
+                filtered_docs = []
+                for doc in sorted_docs:
+                    if search_term and search_term.lower() not in doc['filename'].lower():
+                        continue
+                    filtered_docs.append(doc)
+                
+                if filtered_docs:
+                    st.info(f"📊 Showing {len(filtered_docs)} of {len(sorted_docs)} permanent documents")
+                    
+                    for doc in filtered_docs:
+                        self.render_permanent_document_card(doc)
+                else:
+                    st.info("📭 No permanent documents match your search criteria")
+            else:
+                st.info("📭 No permanent documents found")
+                
+        except Exception as e:
+            st.error(f"❌ Failed to load permanent documents: {e}")
+            st.exception(e)
+    
+    def render_session_documents_view(self):
+        """Render view of current session documents"""
+        try:
+            if not st.session_state.chat_engine:
+                st.warning("⚠️ Please initialize the system first to view session documents")
+                return
+            
+            if not st.session_state.current_session_id:
+                st.info("📭 No active session. Start a new session to see session documents.")
+                return
+            
+            session_info = st.session_state.chat_engine.get_session_info()
+            
+            if not session_info or not session_info.get('documents'):
+                st.info("📭 No documents in current session")
+                return
+            
+            # Session info
+            st.markdown(f"#### ⏱️ Current Session: `{session_info['session_id'][:8]}...`")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("📄 Total", session_info['document_count'])
+            with col2:
+                st.metric("⏱️ Temporary", session_info['temporary_count'])
+            with col3:
+                st.metric("💾 Permanent", session_info['permanent_count'])
+            
+            # Session documents
+            if st.session_state.processed_documents:
+                st.markdown("#### 📋 Session Documents")
+                
+                for doc in st.session_state.processed_documents:
+                    self.render_session_document_card(doc)
+            
+            # Session actions
+            st.markdown("#### 🔧 Session Actions")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("🔚 End Session", key="end_session_main"):
+                    self.end_current_session()
+            
+            with col2:
+                if st.button("🗑️ Clear Session Documents", key="clear_session_main"):
+                    self.clear_session_documents()
+                    
+        except Exception as e:
+            st.error(f"❌ Failed to load session documents: {e}")
+            st.exception(e)
+    
+    def render_document_card(self, doc, show_actions=False):
+        """Render a document card with status and actions"""
+        try:
+            # Create a card-like container with background
+            with st.container():
+                # Create a styled card
+                card_style = """
+                <div style="
+                    background-color: #f0f2f6;
+                    padding: 1rem;
+                    border-radius: 8px;
+                    border-left: 4px solid #1e3c72;
+                    margin: 0.5rem 0;
+                ">
+                """
+                
+                # Document header
+                col1, col2, col3 = st.columns([4, 1, 1])
+                
+                with col1:
+                    # Document name and status
+                    status_icons = {
+                        'processed': '🔄',
+                        'indexed': '🗂️',
+                        'permanent': '💾',
+                        'temporary': '⏱️'
+                    }
+                    
+                    status_text = []
+                    for status in doc.get('status', []):
+                        if status in status_icons:
+                            status_text.append(f"{status_icons[status]} {status.title()}")
+                    
+                    st.markdown(f"**📄 {doc['filename']}**")
+                    st.markdown(f"*Status: {' | '.join(status_text)}*")
+                    
+                    # Get real-time chunk count if available
+                    if st.session_state.chat_engine and 'document_id' in doc:
+                        try:
+                            doc_info = st.session_state.chat_engine.vector_store.get_document_info(doc['document_id'])
+                            if doc_info:
+                                real_chunks = doc_info.get('total_chunks', doc.get('total_chunks', 0))
+                                st.write(f"📊 **Chunks:** {real_chunks}")
+                            else:
+                                st.write(f"📊 **Chunks:** {doc.get('total_chunks', 0)}")
+                        except Exception:
+                            st.write(f"📊 **Chunks:** {doc.get('total_chunks', 0)}")
+                    else:
+                        st.write(f"📊 **Chunks:** {doc.get('total_chunks', 0)}")
+                
+                with col2:
+                    # Document metrics
+                    processed_at = doc.get('processed_at', '')
+                    if processed_at:
+                        st.write(f"**Processed:**")
+                        st.write(processed_at[:10])
+                
+                with col3:
+                    # Document ID (shortened)
+                    if 'document_id' in doc:
+                        st.write(f"**ID:**")
+                        st.write(f"`{doc['document_id'][:8]}...`")
+                
+                # Additional info in a compact format
+                additional_info = []
+                if doc.get('added_to_permanent'):
+                    additional_info.append(f"💾 Permanent: {doc['added_to_permanent'][:10]}")
+                if doc.get('session_id'):
+                    additional_info.append(f"📋 Session: `{doc['session_id'][:8]}...`")
+                
+                if additional_info:
+                    st.write(" | ".join(additional_info))
+                
+                # Actions
+                if show_actions:
+                    col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+                    
+                    with col1:
+                        if st.button("ℹ️ Info", key=f"info_{doc['document_id']}"):
+                            with st.expander("📄 Document Details", expanded=True):
+                                st.json(doc)
+                    
+                    with col2:
+                        if 'permanent' in doc.get('status', []):
+                            if st.button("🗑️ Delete", key=f"delete_all_{doc['document_id']}"):
+                                # Store deletion request in session state for confirmation
+                                st.session_state[f"confirm_delete_all_{doc['document_id']}"] = True
+                                st.rerun()
+                    
+                    # Show confirmation dialog if deletion was requested
+                    if st.session_state.get(f"confirm_delete_all_{doc['document_id']}", False):
+                        st.warning(f"⚠️ **Confirm Deletion of {doc['filename']}**")
+                        st.write("This will **permanently remove** the document from:")
+                        st.write("• Vector database (all embeddings and chunks)")
+                        st.write("• Permanent documents registry")
+                        st.write("• Processed documents directory")
+                        st.write("• All associated files")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("✅ Yes, Delete Permanently", key=f"confirm_all_yes_{doc['document_id']}"):
+                                # Clear confirmation flag and proceed with deletion
+                                del st.session_state[f"confirm_delete_all_{doc['document_id']}"]
+                                self.delete_document(doc['document_id'], doc['filename'])
+                        
+                        with col2:
+                            if st.button("❌ Cancel", key=f"confirm_all_no_{doc['document_id']}"):
+                                # Clear confirmation flag
+                                del st.session_state[f"confirm_delete_all_{doc['document_id']}"]
+                                st.rerun()
+                    
+                    with col3:
+                        if st.button("🔄 Refresh", key=f"refresh_{doc['document_id']}"):
+                            st.rerun()
+                    
+                    with col4:
+                        if st.button("📋 View Chunks", key=f"chunks_{doc['document_id']}"):
+                            self.show_document_chunks(doc['document_id'], doc['filename'])
+                
+                st.divider()
+                
+        except Exception as e:
+            st.error(f"❌ Error rendering document card: {e}")
+    
+    def show_document_chunks(self, document_id, filename):
+        """Show document chunks in a modal-like interface"""
+        try:
+            if not st.session_state.chat_engine:
+                st.error("❌ System not initialized")
+                return
+            
+            # Get document info and chunks
+            doc_info = st.session_state.chat_engine.vector_store.get_document_info(document_id)
+            
+            if not doc_info:
+                st.error(f"❌ Could not find document info for {filename}")
+                return
+            
+            with st.expander(f"📋 Chunks for {filename}", expanded=True):
+                st.write(f"**Total Chunks:** {doc_info.get('total_chunks', 0)}")
+                
+                # Show first few chunks as preview
+                chunks = doc_info.get('chunks', [])
+                if chunks:
+                    st.write("**Sample Chunks:**")
+                    for i, chunk in enumerate(chunks[:3]):  # Show first 3 chunks
+                        st.write(f"**Chunk {i+1}:**")
+                        st.write(f"Page: {chunk.get('page_number', 'N/A')}")
+                        st.write(f"Type: {chunk.get('block_type', 'N/A')}")
+                        st.write(f"Text: {chunk.get('text', '')[:200]}...")
+                        st.divider()
+                    
+                    if len(chunks) > 3:
+                        st.write(f"... and {len(chunks) - 3} more chunks")
+                else:
+                    st.write("No chunk details available")
+                
+        except Exception as e:
+            st.error(f"❌ Error showing chunks: {e}")
+    
+    def render_permanent_document_card(self, doc):
+        """Render a permanent document card"""
+        try:
+            with st.container():
+                col1, col2, col3 = st.columns([3, 1, 1])
+                
+                with col1:
+                    st.markdown(f"**📄 {doc['filename']}**")
+                    
+                    # Get real-time chunk count
+                    if st.session_state.chat_engine:
+                        doc_info = st.session_state.chat_engine.vector_store.get_document_info(doc['document_id'])
+                        actual_chunks = doc_info.get('total_chunks', 0) if doc_info else 0
+                        st.write(f"**Chunks:** {actual_chunks}")
+                    else:
+                        st.write(f"**Chunks:** {doc.get('total_chunks', 0)}")
+                    
+                    st.write(f"**Added:** {doc.get('added_to_permanent', '')[:19]}")
+                
+                with col2:
+                    st.metric("Status", "💾 Permanent")
+                
+                with col3:
+                    # Actions - with confirmation
+                    if st.button("🗑️ Delete", key=f"delete_perm_{doc['document_id']}"):
+                        # Store deletion request in session state for confirmation
+                        st.session_state[f"confirm_delete_{doc['document_id']}"] = True
+                        st.rerun()
+                
+                # Show confirmation dialog if deletion was requested
+                if st.session_state.get(f"confirm_delete_{doc['document_id']}", False):
+                    st.warning(f"⚠️ **Confirm Deletion of {doc['filename']}**")
+                    st.write("This will **permanently remove** the document from:")
+                    st.write("• Vector database (all embeddings and chunks)")
+                    st.write("• Permanent documents registry")
+                    st.write("• Processed documents directory")
+                    st.write("• All associated files")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("✅ Yes, Delete Permanently", key=f"confirm_yes_{doc['document_id']}"):
+                            # Clear confirmation flag and proceed with deletion
+                            del st.session_state[f"confirm_delete_{doc['document_id']}"]
+                            self.delete_permanent_document(doc['document_id'], doc['filename'])
+                    
+                    with col2:
+                        if st.button("❌ Cancel", key=f"confirm_no_{doc['document_id']}"):
+                            # Clear confirmation flag
+                            del st.session_state[f"confirm_delete_{doc['document_id']}"]
+                            st.rerun()
+                
+                st.divider()
+                
+        except Exception as e:
+            st.error(f"❌ Error rendering permanent document card: {e}")
+    
+    def render_session_document_card(self, doc):
+        """Render a session document card"""
+        try:
+            with st.container():
+                col1, col2, col3 = st.columns([3, 1, 1])
+                
+                with col1:
+                    storage_icon = "💾" if doc.get('storage_type') == 'permanent' else "⏱️"
+                    st.markdown(f"**{storage_icon} {doc['filename']}**")
+                    st.write(f"**Chunks:** {doc.get('total_chunks', 0)}")
+                
+                with col2:
+                    st.metric("Type", doc.get('storage_type', 'unknown').title())
+                
+                with col3:
+                    if st.button("ℹ️ Info", key=f"info_session_{doc.get('id', 'unknown')}"):
+                        st.json(doc)
+                
+                st.divider()
+                
+        except Exception as e:
+            st.error(f"❌ Error rendering session document card: {e}")
+    
+    def delete_document(self, document_id, filename):
+        """Delete a document completely from all storage locations"""
+        try:
+            with st.spinner(f"Completely removing document {filename} from all storage locations..."):
+                # Use the comprehensive removal method
+                success = st.session_state.chat_engine.remove_permanent_document(document_id)
+                
+                if success:
+                    st.success(f"✅ Completely removed document {filename} from all storage locations")
+                    st.info("🔄 Document has been removed from:\n" +
+                           "• Vector database (ChromaDB)\n" +
+                           "• Permanent documents registry\n" +
+                           "• Processed documents directory\n" +
+                           "• Embedding files\n" +
+                           "• Current session (if applicable)")
+                    
+                    # Clear cached data
+                    self._clear_document_cache(document_id)
+                    
+                    time.sleep(2)  # Give user time to see the success message
+                    st.rerun()
+                else:
+                    st.error(f"❌ Failed to completely remove document {filename}")
+                    st.warning("⚠️ The document may still exist in some storage locations. Please check the system logs for details.")
+                    
+        except Exception as e:
+            st.error(f"❌ Critical error removing document {filename}: {str(e)}")
+            st.warning("⚠️ Please check the system logs and try again.")
+    
+    def _clear_document_cache(self, document_id):
+        """Clear document from session state caches"""
+        try:
+            # Clear from processed documents list
+            if 'processed_documents' in st.session_state:
+                st.session_state.processed_documents = [
+                    doc for doc in st.session_state.processed_documents 
+                    if doc.get('id') != document_id and doc.get('document_id') != document_id
+                ]
+            
+            # Update session info
+            if st.session_state.chat_engine:
+                st.session_state.session_info = st.session_state.chat_engine.get_session_info()
+            
+            # Clear any other document-related caches
+            if 'conversation_history' in st.session_state:
+                # No need to clear conversation history as it's separate
+                pass
+                
+        except Exception as e:
+            self.logger.warning(f"Error clearing document cache: {e}")
+    
+    def _force_complete_refresh(self):
+        """Force a complete refresh of all document data"""
+        try:
+            # Clear all document-related caches
+            if 'processed_documents' in st.session_state:
+                del st.session_state.processed_documents
+            
+            if 'session_info' in st.session_state:
+                del st.session_state.session_info
+            
+            # Force refresh of session info
+            if st.session_state.chat_engine:
+                st.session_state.session_info = st.session_state.chat_engine.get_session_info()
+            
+            # Initialize empty processed documents list
+            st.session_state.processed_documents = []
             
         except Exception as e:
-            st.error(f"❌ Failed to clear documents: {e}")
+            self.logger.warning(f"Error during complete refresh: {e}")
+    
+    def delete_permanent_document(self, document_id, filename):
+        """Delete a permanent document completely from all storage locations"""
+        try:
+            with st.spinner(f"Completely removing document {filename} from all storage locations..."):
+                success = st.session_state.chat_engine.remove_permanent_document(document_id)
+                
+                if success:
+                    st.success(f"✅ Completely removed document {filename} from all storage locations")
+                    st.info("🔄 Document has been removed from:\n" +
+                           "• Vector database (ChromaDB)\n" +
+                           "• Permanent documents registry\n" +
+                           "• Processed documents directory\n" +
+                           "• Embedding files\n" +
+                           "• Current session (if applicable)")
+                    
+                    # Clear cached data
+                    self._clear_document_cache(document_id)
+                    
+                    time.sleep(2)  # Give user time to see the success message
+                    st.rerun()
+                else:
+                    st.error(f"❌ Failed to completely remove document {filename}")
+                    st.warning("⚠️ The document may still exist in some storage locations. Please check the system logs for details.")
+                    
+        except Exception as e:
+            st.error(f"❌ Critical error removing document {filename}: {str(e)}")
+            st.warning("⚠️ Please check the system logs and try again.")
+    
+    def show_document_status(self):
+        """Show comprehensive document status (legacy method - keeping for compatibility)"""
+        try:
+            checker = DocumentStatusChecker()
+            status = checker.get_all_documents_status()
+            
+            if "error" in status:
+                st.error(f"❌ Error getting document status: {status['error']}")
+                return
+            
+            st.markdown("### 📊 Document Status Overview")
+            
+            # Summary metrics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("📄 Total", status['total_documents'])
+            with col2:
+                st.metric("🔄 Processed", status['processed_only'] + status['processed_and_indexed'])
+            with col3:
+                st.metric("🗂️ Indexed", status['indexed_only'] + status['processed_and_indexed'])
+            with col4:
+                st.metric("💾 Permanent", status['permanent_only'] + status['all_statuses'])
+            
+            # Document details
+            if status['documents']:
+                st.markdown("#### 📋 Document Details")
+                
+                for doc in status['documents']:
+                    with st.expander(f"📄 {doc['filename']}", expanded=False):
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.write(f"**Document ID:** `{doc['document_id']}`")
+                            st.write(f"**Status:** {', '.join(doc['status'])}")
+                            st.write(f"**Processed:** {doc.get('processed_at', 'unknown')[:19]}")
+                            
+                        with col2:
+                            if 'total_chunks' in doc:
+                                st.write(f"**Chunks:** {doc['total_chunks']}")
+                            if 'added_to_permanent' in doc:
+                                st.write(f"**Added to Permanent:** {doc['added_to_permanent'][:19]}")
+                            if 'session_id' in doc:
+                                st.write(f"**Session:** `{doc['session_id'][:8]}...`")
+            else:
+                st.info("📭 No documents found in the system")
+                
+        except Exception as e:
+            st.error(f"❌ Failed to show document status: {e}")
     
     def check_system_health(self):
         """Check system health using actual RAG system"""
@@ -370,6 +1115,36 @@ class StreamlitRAGApp:
         """Render file upload interface"""
         st.markdown("## 📁 Document Upload")
         
+        # Check if session is active
+        if not st.session_state.current_session_id:
+            st.warning("⚠️ Please start a session first to upload documents")
+            return
+        
+        # Show current document status
+        try:
+            checker = DocumentStatusChecker()
+            status = checker.get_all_documents_status()
+            
+            if status['total_documents'] > 0:
+                st.info(f"📊 **Current System Status:** {status['total_documents']} documents total "
+                       f"({status['processed_and_indexed']} processed & indexed, "
+                       f"{status.get('permanent_only', 0) + status.get('all_statuses', 0)} permanent)")
+                
+                # Show list of existing documents
+                with st.expander("📋 View Existing Documents", expanded=False):
+                    for doc in status['documents'][:10]:  # Show first 10
+                        status_icons = {"processed": "🔄", "indexed": "🗂️", "permanent": "💾"}
+                        icons = " ".join([status_icons.get(s, s) for s in doc['status']])
+                        st.write(f"{icons} {doc['filename']}")
+                    
+                    if len(status['documents']) > 10:
+                        st.write(f"... and {len(status['documents']) - 10} more documents")
+            else:
+                st.info("📭 No documents currently in the system. Upload some PDFs to get started!")
+                
+        except Exception as e:
+            st.warning(f"⚠️ Could not check document status: {e}")
+        
         # File uploader
         uploaded_files = st.file_uploader(
             "Choose PDF files",
@@ -387,15 +1162,67 @@ class StreamlitRAGApp:
                 file.seek(0)  # Reset file pointer
                 st.write(f"• {file.name} ({file_size:.1f} MB)")
             
-            # Process files
-            if st.button("🚀 Process Documents", key="process_docs"):
-                self.process_uploaded_files(uploaded_files)
+            st.markdown("### 📁 Storage Options")
+            
+            # Storage type selection
+            storage_option = st.radio(
+                "Choose storage type for uploaded documents:",
+                options=["temporary", "permanent"],
+                format_func=lambda x: {
+                    "temporary": "⏱️ Temporary (removed when session ends)",
+                    "permanent": "💾 Permanent (saved for future sessions)"
+                }[x],
+                help="Temporary documents are automatically removed when you end the session. Permanent documents are saved and can be accessed in future sessions."
+            )
+            
+            # Individual file storage selection
+            if len(uploaded_files) > 1:
+                st.markdown("#### Individual File Settings")
+                
+                use_individual = st.checkbox("Configure storage per file", key="individual_storage")
+                
+                if use_individual:
+                    storage_types = []
+                    for i, file in enumerate(uploaded_files):
+                        file_storage = st.selectbox(
+                            f"Storage for {file.name}:",
+                            options=["temporary", "permanent"],
+                            index=0 if storage_option == "temporary" else 1,
+                            format_func=lambda x: "⏱️ Temporary" if x == "temporary" else "💾 Permanent",
+                            key=f"storage_{i}"
+                        )
+                        storage_types.append(file_storage)
+                else:
+                    storage_types = [storage_option] * len(uploaded_files)
+            else:
+                storage_types = [storage_option]
+            
+            # Processing options
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                if st.button("🚀 Process Documents", key="process_docs"):
+                    self.process_uploaded_files(uploaded_files, storage_types)
+            
+            with col2:
+                force_reprocess = st.checkbox("🔄 Force Reprocess", help="Reprocess documents even if they already exist")
+                if st.button("🔄 Process (Force)", key="force_process_docs"):
+                    self.process_uploaded_files(uploaded_files, storage_types, force_reprocess=True)
+            
+            # Show storage summary
+            if len(uploaded_files) > 1:
+                temp_count = storage_types.count("temporary")
+                perm_count = storage_types.count("permanent")
+                st.info(f"📊 Summary: {temp_count} temporary, {perm_count} permanent documents")
     
-    def process_uploaded_files(self, uploaded_files):
+    def process_uploaded_files(self, uploaded_files, storage_types=None, force_reprocess=False):
         """Process uploaded PDF files using the actual RAG system"""
         if not st.session_state.chat_engine:
             st.error("❌ Please initialize the system first")
             return
+        
+        if storage_types is None:
+            storage_types = ['temporary'] * len(uploaded_files)
         
         # Save uploaded files temporarily
         temp_dir = Path("temp_uploads")
@@ -433,7 +1260,9 @@ class StreamlitRAGApp:
             result = asyncio.run(
                 st.session_state.chat_engine.add_documents_async(
                     file_paths=file_paths,
-                    progress_callback=update_progress
+                    storage_types=storage_types,
+                    progress_callback=update_progress,
+                    force_reprocess=force_reprocess
                 )
             )
             
@@ -448,24 +1277,33 @@ class StreamlitRAGApp:
                 
                 chunks_per_doc = total_chunks // len(file_paths) if len(file_paths) > 0 else 0
                 
-                for file_path in file_paths:
+                for i, file_path in enumerate(file_paths):
                     filename = Path(file_path).name
                     st.session_state.processed_documents.append({
                         'filename': filename,
                         'total_chunks': chunks_per_doc,
-                        'processed_at': datetime.now().isoformat()
+                        'processed_at': datetime.now().isoformat(),
+                        'storage_type': storage_types[i] if i < len(storage_types) else 'temporary'
                     })
                 
                 progress_bar.progress(1.0)
                 status_text.text("✅ All documents processed successfully!")
                 
+                # Update session info
+                st.session_state.session_info = st.session_state.chat_engine.get_session_info()
+                
                 st.success(f"✅ Processed {len(uploaded_files)} documents successfully!")
                 
-                # Show processing summary
+                # Show processing summary with storage info
+                temp_count = storage_types.count("temporary")
+                perm_count = storage_types.count("permanent")
+                
                 st.info(f"📊 Processing Summary:\n" + 
                        f"- Total documents: {result['total_documents']}\n" + 
                        f"- Total chunks: {result['total_chunks']}\n" + 
-                       f"- Processing time: {result['processing_time']:.1f}s")
+                       f"- Processing time: {result['processing_time']:.1f}s\n" +
+                       f"- Temporary documents: {temp_count}\n" +
+                       f"- Permanent documents: {perm_count}")
             else:
                 st.error(f"❌ Processing failed: {result.get('error', 'Unknown error')}")
             
@@ -656,16 +1494,19 @@ class StreamlitRAGApp:
         self.render_header()
         self.render_sidebar()
         
-        # Main content tabs
-        tab1, tab2, tab3 = st.tabs(["📁 Upload", "💬 Chat", "📊 Analytics"])
+        # Main content tabs with Document Management as the first tab
+        tab1, tab2, tab3, tab4 = st.tabs(["📚 Document Management", "📁 Upload", "💬 Chat", "📊 Analytics"])
         
         with tab1:
-            self.render_file_upload()
+            self.render_document_management_section()
         
         with tab2:
-            self.render_chat_interface()
+            self.render_file_upload()
         
         with tab3:
+            self.render_chat_interface()
+        
+        with tab4:
             self.render_analytics()
         
         # Footer

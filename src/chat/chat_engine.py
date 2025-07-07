@@ -10,7 +10,7 @@ from datetime import datetime
 from ..config import get_config, get_logger
 from ..ingestion import DocumentProcessor
 from ..embeddings import EmbeddingManager
-from ..storage import ChromaVectorStore
+from ..storage import ChromaVectorStore, SessionManager
 from ..llm import OllamaClient
 from ..tracking import SourceTracker, SourceReference
 
@@ -29,6 +29,7 @@ class ChatEngine:
         self.vector_store = ChromaVectorStore()
         self.ollama_client = OllamaClient()
         self.source_tracker = SourceTracker()
+        self.session_manager = SessionManager()
         
         # Re-register existing documents with source tracker
         try:
@@ -44,17 +45,58 @@ class ChatEngine:
         
         self.logger.info("ChatEngine initialized successfully")
     
+    def start_session(self) -> str:
+        """Start a new document session"""
+        return self.session_manager.start_session()
+    
+    def end_session(self) -> Dict[str, Any]:
+        """End the current session and clean up temporary documents"""
+        return self.session_manager.end_session(self.vector_store)
+    
+    def get_session_info(self) -> Optional[Dict[str, Any]]:
+        """Get information about the current session"""
+        return self.session_manager.get_session_info()
+    
+    def get_permanent_documents(self) -> List[Dict[str, Any]]:
+        """Get list of all permanent documents"""
+        return self.session_manager.get_permanent_documents()
+    
+    def remove_permanent_document(self, document_id: str) -> bool:
+        """Remove a document from permanent storage"""
+        return self.session_manager.remove_permanent_document(document_id, self.vector_store)
+    
     async def add_documents_async(
         self, 
         file_paths: List[str],
+        storage_types: Optional[List[str]] = None,
         progress_callback: Optional[callable] = None,
         force_reprocess: bool = False
     ) -> Dict[str, Any]:
-        """Add multiple documents to the RAG system with duplicate detection"""
+        """
+        Add multiple documents to the RAG system with duplicate detection
+        
+        Args:
+            file_paths: List of file paths to process
+            storage_types: List of storage types ('temporary' or 'permanent') for each file.
+                          If None, defaults to 'temporary' for all files.
+            progress_callback: Optional callback for progress updates
+            force_reprocess: Force reprocessing even if document exists
+        """
         
         start_time = time.time()
         
         try:
+            # Validate storage types
+            if storage_types is None:
+                storage_types = ['temporary'] * len(file_paths)
+            elif len(storage_types) != len(file_paths):
+                raise ValueError("storage_types must have the same length as file_paths")
+            
+            # Validate storage type values
+            for storage_type in storage_types:
+                if storage_type not in ['temporary', 'permanent']:
+                    raise ValueError(f"Invalid storage type: {storage_type}. Must be 'temporary' or 'permanent'")
+            
             self.logger.info(f"Processing {len(file_paths)} documents...")
             
             # Process documents with Marker
@@ -147,10 +189,18 @@ class ChatEngine:
                             processed_doc
                         )
                         
+                        # Add to session with appropriate storage type
+                        storage_type = storage_types[file_paths.index(processed_doc["source_path"])]
+                        self.session_manager.add_document_to_session(
+                            processed_doc["id"],
+                            storage_type,
+                            processed_doc
+                        )
+                        
                         successful_docs += 1
                         total_chunks += len(chunks)
                         
-                        self.logger.info(f"Successfully indexed {processed_doc['filename']} with {len(chunks)} chunks")
+                        self.logger.info(f"Successfully indexed {processed_doc['filename']} with {len(chunks)} chunks as {storage_type}")
                     else:
                         self.logger.error(f"Failed to add {processed_doc['filename']} to vector store")
                         failed_indexing.append({
