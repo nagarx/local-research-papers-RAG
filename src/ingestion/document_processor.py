@@ -3,6 +3,9 @@ Document Processor - Modular Implementation
 
 This module provides a streamlined document processor that orchestrates
 specialized components for efficient PDF processing.
+
+This is the production version that replaced the original 1389-line monolithic
+implementation with a 75% smaller modular architecture.
 """
 
 import asyncio

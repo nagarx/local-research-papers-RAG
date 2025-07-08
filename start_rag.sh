@@ -1,12 +1,17 @@
 #!/bin/bash
-# ArXiv RAG Assistant Launcher
-echo "🚀 Starting ArXiv RAG Assistant..."
+# ArXiv Paper RAG Assistant Launcher
 
-# Check if virtual environment exists
-if [ -d "venv" ]; then
-    echo "📦 Activating virtual environment..."
-    source venv/bin/activate
+cd "$(dirname "$0")"
+
+# Activate virtual environment
+source venv/bin/activate
+
+# Check if Ollama is running
+if ! pgrep -f "ollama" > /dev/null; then
+    echo "Starting Ollama..."
+    ollama serve &
+    sleep 5
 fi
 
-# Start the application
+# Launch the application
 python run.py
