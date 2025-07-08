@@ -6,7 +6,7 @@ Now with modular architecture for better maintainability and testing.
 """
 
 # Main interface (choose implementation)
-from .document_processor_new import DocumentProcessor, get_global_marker_models
+from .document_processor import DocumentProcessor, get_global_marker_models
 
 # Specialized components for advanced usage
 from .marker_integration import MarkerProcessor

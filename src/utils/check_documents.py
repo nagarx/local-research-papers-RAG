@@ -135,7 +135,7 @@ def test_document_processor_integration():
     print("-" * 50)
     
     try:
-        from ..ingestion.document_processor import DocumentProcessor
+        from ..ingestion import DocumentProcessor
         from ..storage.chroma_vector_store import ChromaVectorStore  
         from ..embeddings.embedding_manager import EmbeddingManager
         from ..storage.session_manager import SessionManager
