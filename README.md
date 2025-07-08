@@ -6,7 +6,7 @@
 
 **Document Processing**: Marker-based extraction preserving LaTeX notation, citations, and hierarchical structure. Implements sliding window chunking with configurable overlap to maintain semantic coherence across section boundaries.
 
-**Embedding Framework**: Sentence-transformers generate dense vector representations (768d) optimized for academic text similarity. ChromaDB vector store implements HNSW indexing with cosine similarity for sub-linear retrieval complexity.
+**Embedding Framework**: BAAI/bge-large-en-v1.5 model generates dense vector representations (1024d) optimized for academic text similarity with 512-token context windows. ChromaDB vector store implements HNSW indexing with cosine similarity for sub-linear retrieval complexity.
 
 **Generation**: Local LLaMA 3.2 (7B parameters) via Ollama for privacy-preserving inference. Retrieval-augmented prompting with top-k similar chunks and structured citation metadata for source attribution.
 
