@@ -195,7 +195,12 @@ class DocumentProcessor:
         )
         
         # Process with Marker
-        self.logger.debug(f"Starting Marker processing for: {file_path.name}")
+        if self.enhanced_logger:
+            self.enhanced_logger.marker_processing_start(file_path.name)
+            self.enhanced_logger.marker_cleanup("Pre-processing cleanup")
+        else:
+            self.logger.debug(f"Starting Marker processing for: {file_path.name}")
+        
         self._cleanup_resources()  # Clean up before processing
         
         try:
@@ -204,15 +209,25 @@ class DocumentProcessor:
             
             # Extract text
             text, ext, images = self.marker_processor.extract_text_from_rendered(rendered)
-            self.logger.info(f"Extracted: {len(text)} chars, {len(images)} images")
+            
+            if self.enhanced_logger:
+                self.enhanced_logger.marker_processing_stage("Text Extraction Complete", file_path.name, f"{len(text)} chars, {len(images)} images")
+                self.enhanced_logger.marker_cleanup("Post-processing cleanup")
+            else:
+                self.logger.info(f"Extracted: {len(text)} chars, {len(images)} images")
             
             # Clean up after processing
             self._cleanup_resources()
             
         except Exception as e:
             # Aggressive cleanup on error
+            if self.enhanced_logger:
+                self.enhanced_logger.marker_error(f"Processing failed", file_path.name, e)
+                self.enhanced_logger.marker_cleanup("Error cleanup")
+            else:
+                self.logger.error(f"Marker processing failed for {file_path.name}: {e}")
+            
             self._cleanup_resources()
-            self.logger.error(f"Marker processing failed for {file_path.name}: {e}")
             raise e
         
         # Save raw extracted text

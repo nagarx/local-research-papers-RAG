@@ -66,7 +66,15 @@ def get_global_marker_models():
     
     if _GLOBAL_MARKER_MODELS is None:
         logger = get_logger(__name__)
-        logger.info("Loading Marker models globally (one-time setup)...")
+        
+        # Try to get enhanced logger for better tracking
+        try:
+            from ..utils.enhanced_logging import get_enhanced_logger
+            enhanced_logger = get_enhanced_logger(__name__)
+            enhanced_logger.marker_model_loading("Global Models", "One-time setup")
+        except ImportError:
+            enhanced_logger = None
+            logger.info("Loading Marker models globally (one-time setup)...")
         
         # Clean up any existing resources before loading models
         try:
@@ -91,7 +99,11 @@ def get_global_marker_models():
             except ImportError:
                 pass
             
-            logger.info(f"Global Marker models loaded in {_GLOBAL_MODEL_LOAD_TIME:.2f}s")
+            if enhanced_logger:
+                enhanced_logger.marker_model_ready("Global Models", _GLOBAL_MODEL_LOAD_TIME, "All models loaded")
+                enhanced_logger.marker_performance("Model Loading", memory_mb=0, load_time=_GLOBAL_MODEL_LOAD_TIME)
+            else:
+                logger.info(f"Global Marker models loaded in {_GLOBAL_MODEL_LOAD_TIME:.2f}s")
             
         except Exception as e:
             # Clean up on error
@@ -102,7 +114,10 @@ def get_global_marker_models():
             except ImportError:
                 pass
             
-            logger.error(f"Failed to load global Marker models: {e}")
+            if enhanced_logger:
+                enhanced_logger.marker_error(f"Failed to load global models", exception=e)
+            else:
+                logger.error(f"Failed to load global Marker models: {e}")
             raise
     
     return _GLOBAL_MARKER_MODELS
@@ -118,17 +133,35 @@ class MarkerProcessor:
         self.config = get_config()
         self.logger = get_logger(__name__)
         
+        # Try to get enhanced logger for better tracking
+        try:
+            from ..utils.enhanced_logging import get_enhanced_logger, configure_marker_logging
+            self.enhanced_logger = get_enhanced_logger(__name__)
+            
+            # Configure logging only once using a class variable to prevent repeated calls
+            if not hasattr(MarkerProcessor, '_logging_configured'):
+                configure_marker_logging(enable_debug=True, log_level="DEBUG")
+                MarkerProcessor._logging_configured = True
+        except ImportError:
+            self.enhanced_logger = None
+        
         # Use global models
         self.marker_models = get_global_marker_models()
         
         # Setup converter
         self._setup_converter()
         
-        self.logger.info("MarkerProcessor initialized successfully")
+        if self.enhanced_logger:
+            self.enhanced_logger.system_ready("MarkerProcessor", "Converter initialized")
+        else:
+            self.logger.info("MarkerProcessor initialized successfully")
     
     def _setup_converter(self):
         """Setup converter following documentation pattern exactly"""
-        self.logger.info("Setting up Marker converter...")
+        if self.enhanced_logger:
+            self.enhanced_logger.processing_start("Marker Converter Setup")
+        else:
+            self.logger.info("Setting up Marker converter...")
         
         # Configuration following documentation best practices
         config = {
@@ -163,9 +196,15 @@ class MarkerProcessor:
                 "redo_inline_math": True,
                 "llm_service": "marker.services.gemini.GoogleGeminiService",
             })
-            self.logger.info("LLM features enabled for Marker")
+            if self.enhanced_logger:
+                self.enhanced_logger.system_ready("Marker LLM", "Gemini service enabled")
+            else:
+                self.logger.info("LLM features enabled for Marker")
         else:
-            self.logger.info("LLM features disabled for Marker")
+            if self.enhanced_logger:
+                self.enhanced_logger.system_ready("Marker LLM", "Disabled")
+            else:
+                self.logger.info("LLM features disabled for Marker")
         
         # Create converter
         config_parser = ConfigParser(config)
@@ -177,7 +216,10 @@ class MarkerProcessor:
             llm_service=config_parser.get_llm_service()
         )
         
-        self.logger.info("Marker converter initialized with strict single-worker configuration")
+        if self.enhanced_logger:
+            self.enhanced_logger.processing_complete("Marker Converter Setup", 0, "Single-worker configuration")
+        else:
+            self.logger.info("Marker converter initialized with strict single-worker configuration")
     
     def process_document(self, file_path: Union[str, Path]) -> Any:
         """Process document with Marker"""
@@ -196,31 +238,70 @@ class MarkerProcessor:
                 raise ValueError(f"File is empty: {file_path}")
             
             if file_size > 100 * 1024 * 1024:  # 100MB limit
-                self.logger.warning(f"Large file detected ({file_size / 1024 / 1024:.1f}MB): {file_path}")
+                if self.enhanced_logger:
+                    self.enhanced_logger.marker_warning(f"Large file detected ({file_size / 1024 / 1024:.1f}MB)", file_path.name)
+                else:
+                    self.logger.warning(f"Large file detected ({file_size / 1024 / 1024:.1f}MB): {file_path}")
+            
+            # Start processing with enhanced logging
+            start_time = time.time()
+            
+            if self.enhanced_logger:
+                self.enhanced_logger.marker_processing_start(file_path.name)
+                self.enhanced_logger.marker_processing_stage("Validation", file_path.name, f"Size: {file_size / 1024 / 1024:.1f}MB")
+            else:
+                self.logger.debug(f"Starting Marker processing for: {file_path}")
             
             # Process with Marker
-            self.logger.debug(f"Starting Marker processing for: {file_path}")
             result = self.converter(str(file_path))
-            self.logger.debug(f"Marker processing completed for: {file_path}")
+            
+            processing_time = time.time() - start_time
+            
+            if self.enhanced_logger:
+                # Try to get page count from result
+                page_count = getattr(result, 'page_count', 0) if hasattr(result, 'page_count') else 0
+                self.enhanced_logger.marker_processing_complete(file_path.name, processing_time, pages=page_count)
+                self.enhanced_logger.marker_performance("Document Processing", file_path.name, 
+                                                       duration=processing_time, 
+                                                       file_size_mb=file_size / 1024 / 1024,
+                                                       pages=page_count)
+            else:
+                self.logger.debug(f"Marker processing completed for: {file_path}")
             
             return result
             
         except Exception as e:
-            self.logger.error(f"Marker processing failed for {file_path}: {type(e).__name__}: {str(e)}")
+            if self.enhanced_logger:
+                self.enhanced_logger.marker_error(f"Processing failed", file_path.name, e)
+            else:
+                self.logger.error(f"Marker processing failed for {file_path}: {type(e).__name__}: {str(e)}")
             raise RuntimeError(f"Document processing failed: {str(e)}") from e
     
     def extract_text_from_rendered(self, rendered) -> tuple:
         """Extract text from rendered document"""
         try:
             text, ext, images = text_from_rendered(rendered)
-            self.logger.info(f"Extracted: {len(text)} chars, {len(images)} images")
+            
+            if self.enhanced_logger:
+                self.enhanced_logger.marker_processing_stage("Text Extraction", "rendered", f"{len(text)} chars")
+                self.enhanced_logger.marker_image_extraction("rendered", len(images))
+            else:
+                self.logger.info(f"Extracted: {len(text)} chars, {len(images)} images")
+            
             return text, ext, images
+            
         except Exception as e:
-            self.logger.warning(f"text_from_rendered failed, using fallback: {e}")
+            if self.enhanced_logger:
+                self.enhanced_logger.marker_warning(f"text_from_rendered failed, using fallback: {e}")
+            else:
+                self.logger.warning(f"text_from_rendered failed, using fallback: {e}")
             return self._fallback_extraction(rendered)
     
     def _fallback_extraction(self, rendered) -> tuple:
         """Fallback extraction if text_from_rendered fails"""
+        if self.enhanced_logger:
+            self.enhanced_logger.marker_processing_stage("Fallback Extraction", "rendered", "Using fallback method")
+        
         if hasattr(rendered, 'markdown'):
             return rendered.markdown, "md", getattr(rendered, 'images', {})
         elif hasattr(rendered, 'html'):

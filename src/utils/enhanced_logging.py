@@ -219,6 +219,102 @@ class EnhancedLogger:
             self.error_clean(f"{operation_name} failed after {duration:.2f}s", e)
             raise
 
+    def marker_model_loading(self, model_type: str, details: str = ""):
+        """Log marker model loading"""
+        self.logger.info(f"🤖 MARKER MODEL: Loading {model_type}{' - ' + details if details else ''}")
+    
+    def marker_model_ready(self, model_type: str, load_time: float, details: str = ""):
+        """Log marker model ready"""
+        self.logger.info(
+            f"✅ MARKER MODEL: {model_type} ready in {load_time:.2f}s"
+            f"{' - ' + details if details else ''}"
+        )
+    
+    def marker_processing_start(self, filename: str, pages: int = 0):
+        """Log marker processing start"""
+        pages_info = f" ({pages} pages)" if pages > 0 else ""
+        self.logger.info(f"📄 MARKER: Processing '{filename}'{pages_info}")
+    
+    def marker_processing_stage(self, stage: str, filename: str, details: str = ""):
+        """Log marker processing stage"""
+        self.logger.info(f"   ├─ {stage}: {filename}{' - ' + details if details else ''}")
+    
+    def marker_processing_complete(self, filename: str, duration: float, pages: int = 0, chunks: int = 0):
+        """Log marker processing completion"""
+        pages_info = f"{pages} pages, " if pages > 0 else ""
+        chunks_info = f"{chunks} chunks" if chunks > 0 else ""
+        self.logger.info(
+            f"✅ MARKER: '{filename}' processed in {duration:.2f}s - {pages_info}{chunks_info}"
+        )
+    
+    def marker_ocr_start(self, filename: str, pages: int = 0):
+        """Log marker OCR start"""
+        pages_info = f" ({pages} pages)" if pages > 0 else ""
+        self.logger.info(f"👁️  MARKER OCR: Processing '{filename}'{pages_info}")
+    
+    def marker_ocr_complete(self, filename: str, duration: float, pages_processed: int = 0):
+        """Log marker OCR completion"""
+        pages_info = f"{pages_processed} pages " if pages_processed > 0 else ""
+        self.logger.info(f"✅ MARKER OCR: '{filename}' - {pages_info}processed in {duration:.2f}s")
+    
+    def marker_layout_detection(self, filename: str, pages: int = 0):
+        """Log marker layout detection"""
+        pages_info = f" ({pages} pages)" if pages > 0 else ""
+        self.logger.info(f"🔍 MARKER LAYOUT: Detecting layout for '{filename}'{pages_info}")
+    
+    def marker_equation_processing(self, filename: str, equations: int = 0):
+        """Log marker equation processing"""
+        eq_info = f" ({equations} equations)" if equations > 0 else ""
+        self.logger.info(f"📐 MARKER EQUATIONS: Processing '{filename}'{eq_info}")
+    
+    def marker_image_extraction(self, filename: str, images: int = 0):
+        """Log marker image extraction"""
+        img_info = f" ({images} images)" if images > 0 else ""
+        self.logger.info(f"🖼️  MARKER IMAGES: Extracting from '{filename}'{img_info}")
+    
+    def marker_cleanup(self, operation: str, details: str = ""):
+        """Log marker cleanup operations"""
+        self.logger.info(f"🧹 MARKER CLEANUP: {operation}{' - ' + details if details else ''}")
+    
+    def marker_warning(self, message: str, filename: str = ""):
+        """Log marker-specific warning"""
+        file_info = f" [{filename}]" if filename else ""
+        self.logger.warning(f"⚠️  MARKER{file_info}: {message}")
+    
+    def marker_error(self, message: str, filename: str = "", exception: Exception = None):
+        """Log marker-specific error"""
+        file_info = f" [{filename}]" if filename else ""
+        error_msg = f"❌ MARKER{file_info}: {message}"
+        if exception:
+            error_msg += f" | {type(exception).__name__}: {str(exception)}"
+        self.logger.error(error_msg)
+    
+    def marker_performance(self, operation: str, filename: str = "", **metrics):
+        """Log marker performance metrics"""
+        file_info = f" [{filename}]" if filename else ""
+        metrics_str = ", ".join([f"{k}: {v}" for k, v in metrics.items()])
+        self.logger.info(f"📊 MARKER PERF{file_info}: {operation} - {metrics_str}")
+    
+    def marker_resource_usage(self, operation: str, memory_mb: float, gpu_memory_mb: float = 0):
+        """Log marker resource usage"""
+        gpu_info = f", GPU: {gpu_memory_mb:.1f}MB" if gpu_memory_mb > 0 else ""
+        self.logger.info(f"💾 MARKER RESOURCES: {operation} - Memory: {memory_mb:.1f}MB{gpu_info}")
+    
+    def marker_cache_info(self, operation: str, cache_hit: bool, details: str = ""):
+        """Log marker cache operations"""
+        cache_status = "HIT" if cache_hit else "MISS"
+        self.logger.info(f"🗄️  MARKER CACHE: {operation} - {cache_status}{' - ' + details if details else ''}")
+    
+    def marker_batch_progress(self, current: int, total: int, operation: str = "processing"):
+        """Log marker batch processing progress"""
+        percentage = (current / total) * 100
+        self.logger.info(f"📊 MARKER BATCH: {operation} {current}/{total} ({percentage:.1f}%)")
+    
+    def marker_model_stats(self, model_type: str, **stats):
+        """Log marker model statistics"""
+        stats_str = ", ".join([f"{k}: {v}" for k, v in stats.items()])
+        self.logger.info(f"📈 MARKER MODEL STATS: {model_type} - {stats_str}")
+
 
 class LoggingManager:
     """Central logging manager for the RAG system"""
@@ -272,15 +368,72 @@ class LoggingManager:
             logger.logger.info(line)
             print(line)  # Also print to console for visibility
     
-    def suppress_noisy_loggers(self):
-        """Suppress noisy third-party loggers"""
-        noisy_loggers = [
+    def enable_all_logging(self):
+        """ENABLE ALL LOGGING - No suppression, show everything from all libraries"""
+        # Import config to check debug mode
+        try:
+            from ..config import get_config
+            config = get_config()
+            debug_mode = config.debug
+        except ImportError:
+            debug_mode = False
+        
+        # ALL loggers - enable EVERYTHING at DEBUG level
+        all_loggers = [
+            # Core Python libraries
             'torch', 'transformers', 'sentence_transformers', 
-            'urllib3', 'requests', 'httpx'
+            'urllib3', 'requests', 'httpx',
+            
+            # Marker-specific loggers
+            'marker', 'marker.models', 'marker.converters', 'marker.providers',
+            'marker.builders', 'marker.processors', 'marker.renderers', 'marker.services',
+            'surya', 'surya.ocr', 'surya.layout', 'surya.model',
+            'texify', 'texify.inference', 'pdfium', 'pypdfium2', 'pdf_postprocessor',
+            
+            # Image processing
+            'PIL', 'PIL.PngImagePlugin', 'PIL.JpegImagePlugin',
+            
+            # ML/AI libraries
+            'transformers.tokenization_utils', 'transformers.modeling_utils',
+            'accelerate', 'torch.nn.parallel', 'torch.distributed',
+            'huggingface_hub', 'huggingface_hub.file_download',
+            
+            # Network libraries
+            'urllib3.connectionpool', 'requests.packages.urllib3.connectionpool',
+            
+            # ChromaDB
+            'chromadb', 'chromadb.db', 'chromadb.api',
+            
+            # Streamlit
+            'streamlit', 'streamlit.runtime',
+            
+            # General Python
+            'asyncio', 'multiprocessing', 'threading',
         ]
         
-        for logger_name in noisy_loggers:
-            logging.getLogger(logger_name).setLevel(logging.ERROR)
+        # ENABLE ALL LOGGING - Set everything to DEBUG for maximum visibility
+        for logger_name in all_loggers:
+            logger = logging.getLogger(logger_name)
+            logger.setLevel(logging.DEBUG)
+            logger.disabled = False
+            print(f"🔍 ENABLED ALL LOGGING: {logger_name} -> DEBUG level")
+        
+        # Set root logger to DEBUG to catch everything
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
+        print(f"🔍 ENABLED ROOT LOGGER: -> DEBUG level")
+        
+        # Also enable tqdm for progress bars
+        logging.getLogger('tqdm').setLevel(logging.DEBUG)
+        print(f"🔍 ENABLED TQDM LOGGING: -> DEBUG level")
+        
+        print("🎯 ALL LOGGING ENABLED - You will see EVERYTHING from ALL libraries!")
+        print("📋 No logs are suppressed - complete pipeline visibility!")
+    
+    # Keep old function name for backwards compatibility
+    def suppress_noisy_loggers(self):
+        """Backwards compatibility - now enables all logging instead of suppressing"""
+        self.enable_all_logging()
 
 
 # Global instance
@@ -299,5 +452,83 @@ def startup_complete(total_time: float):
     _logging_manager.startup_complete(total_time)
 
 def suppress_noisy_loggers():
-    """Suppress noisy third-party loggers"""
-    _logging_manager.suppress_noisy_loggers() 
+    """Backwards compatibility - now enables all logging instead of suppressing"""
+    _logging_manager.enable_all_logging()
+
+def enable_all_logging():
+    """Enable all logging from all libraries - complete pipeline visibility"""
+    _logging_manager.enable_all_logging()
+
+
+def configure_marker_logging(enable_debug: bool = False, log_level: str = "ERROR"):
+    """Configure ALL logging levels dynamically - ENABLE EVERYTHING, NO SUPPRESSION"""
+    import logging
+    
+    # ALL loggers - enable EVERYTHING
+    all_loggers = [
+        # Core Python libraries
+        'torch', 'transformers', 'sentence_transformers', 
+        'urllib3', 'requests', 'httpx',
+        
+        # Marker-specific loggers
+        'marker', 'marker.models', 'marker.converters', 'marker.providers',
+        'marker.builders', 'marker.processors', 'marker.renderers', 'marker.services',
+        'surya', 'surya.ocr', 'surya.layout', 'surya.model',
+        'texify', 'texify.inference', 'pdfium', 'pypdfium2', 'pdf_postprocessor',
+        
+        # Image processing
+        'PIL', 'PIL.PngImagePlugin', 'PIL.JpegImagePlugin',
+        
+        # ML/AI libraries
+        'transformers.tokenization_utils', 'transformers.modeling_utils',
+        'accelerate', 'torch.nn.parallel', 'torch.distributed',
+        'huggingface_hub', 'huggingface_hub.file_download',
+        
+        # Network libraries
+        'urllib3.connectionpool', 'requests.packages.urllib3.connectionpool',
+        
+        # ChromaDB
+        'chromadb', 'chromadb.db', 'chromadb.api',
+        
+        # Streamlit
+        'streamlit', 'streamlit.runtime',
+        
+        # General Python
+        'asyncio', 'multiprocessing', 'threading', 'tqdm'
+    ]
+    
+    # ENABLE ALL logging at DEBUG level for maximum visibility
+    for logger_name in all_loggers:
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(logging.DEBUG)
+        logger.disabled = False
+        print(f"🔍 ALL LOGGING ENABLED: {logger_name} -> DEBUG")
+    
+    # Set root logger to DEBUG to catch everything
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    print(f"🔍 ROOT LOGGER ENABLED: -> DEBUG")
+    
+    print("🎯 ALL LOGGERS ENABLED - Complete pipeline visibility!")
+    print("📋 NO suppression - you will see EVERYTHING from ALL libraries!")
+
+
+def get_marker_logging_stats():
+    """Get current marker logging configuration stats"""
+    import logging
+    
+    marker_loggers = [
+        'marker', 'surya', 'texify', 'pdfium', 'pypdfium2', 'pdf_postprocessor'
+    ]
+    
+    stats = {}
+    for logger_name in marker_loggers:
+        logger = logging.getLogger(logger_name)
+        stats[logger_name] = {
+            'level': logging.getLevelName(logger.level),
+            'effective_level': logging.getLevelName(logger.getEffectiveLevel()),
+            'handlers': len(logger.handlers),
+            'disabled': logger.disabled
+        }
+    
+    return stats 

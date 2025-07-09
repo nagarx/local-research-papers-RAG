@@ -372,15 +372,15 @@ class Config(BaseSettings):
     )
         
     def setup_logging(self):
-        """Setup application logging"""
+        """Setup application logging - ENABLE ALL LOGS FOR COMPLETE VISIBILITY"""
         log_level = getattr(logging, self.log_level.upper(), logging.INFO)
         
         # Ensure logs directory exists
         self.storage_paths.logs_dir.mkdir(parents=True, exist_ok=True)
         
-        # Configure logging
+        # Configure logging - set to DEBUG for maximum visibility
         logging.basicConfig(
-            level=log_level,
+            level=logging.DEBUG,  # Always DEBUG for complete visibility
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             handlers=[
                 logging.FileHandler(
@@ -390,12 +390,22 @@ class Config(BaseSettings):
             ]
         )
         
-        # Set specific loggers
-        if not self.debug:
-            # Suppress verbose logs in production
-            logging.getLogger('sentence_transformers').setLevel(logging.WARNING)
-            logging.getLogger('transformers').setLevel(logging.WARNING)
-            logging.getLogger('torch').setLevel(logging.WARNING)
+        # ENABLE ALL LOGGING - No suppression of any libraries
+        all_libraries = [
+            'sentence_transformers', 'transformers', 'torch',
+            'marker', 'surya', 'texify', 'pdfium', 'pypdfium2',
+            'PIL', 'urllib3', 'requests', 'httpx', 'chromadb',
+            'streamlit', 'tqdm', 'asyncio', 'multiprocessing'
+        ]
+        
+        for library in all_libraries:
+            logger = logging.getLogger(library)
+            logger.setLevel(logging.DEBUG)
+            logger.disabled = False
+        
+        # Set root logger to DEBUG to catch everything
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
     
     def ensure_setup(self):
         """Ensure all necessary setup is complete"""
@@ -414,28 +424,34 @@ class Config(BaseSettings):
     def get_marker_config(self) -> Dict[str, Any]:
         """Get Marker-specific configuration dictionary"""
         return {
-            "output_format": "chunks",
+            # Core processing settings
+            "output_format": "markdown",
             "paginate_output": True,
             "use_llm": self.marker.use_llm,
             "extract_images": self.marker.extract_images,
             "format_lines": self.marker.format_lines,
             "force_ocr": self.marker.force_ocr,
+            "batch_size": self.marker.batch_size,
             
-            # Ollama integration
+            # LLM service configuration
             "llm_service": "marker.services.ollama.OllamaService",
-            "ollama_base_url": self.ollama.base_url,
-            "ollama_model": self.ollama.model,
+            "redo_inline_math": True,
             
             # Performance settings
             "pdftext_workers": min(4, self.marker.batch_size),
-            "detection_batch_size": 10,
-            "recognition_batch_size": 64,
-            "layout_batch_size": 12,
+            "parallel_factor": 1,
+            "workers": 1,
+            "max_workers": 1,
             
-            # Quality settings
-            "strip_existing_ocr": True,
+            # Logging and progress control
             "disable_tqdm": not self.debug,
-            "keep_chars": False,  # Not needed for RAG
+            "enable_marker_logging": self.debug,
+            "marker_log_level": "INFO" if self.debug else "ERROR",
+            
+            # Resource management
+            "single_threaded": True,
+            "disable_multiprocessing": True,
+            "cleanup_on_exit": True,
         }
     
     def get_streamlit_config(self) -> Dict[str, Any]:
