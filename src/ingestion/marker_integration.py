@@ -64,141 +64,142 @@ class MarkerProcessor:
             self.logger.error(f"❌ Marker CLI not available: {e}")
             raise RuntimeError(f"Marker CLI not available: {e}")
     
-    def process_document(self, file_path: Union[str, Path]) -> Dict[str, Any]:
-        """Process document using marker CLI"""
+    def process_document(self, file_path: Union[str, Path]) -> Tuple[str, str, list]:
+        """
+        Process a document using the Marker CLI with complete isolation
+        
+        Args:
+            file_path: Path to the PDF file to process
+            
+        Returns:
+            Tuple of (text_content, format_type, images)
+        """
         file_path = Path(file_path)
         
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
         
-        if not file_path.is_file():
-            raise ValueError(f"Path is not a file: {file_path}")
+        if self.enhanced_logger:
+            self.enhanced_logger.processing_start(f"Processing {file_path.name}")
         
-        # Check file size
-        file_size = file_path.stat().st_size
-        if file_size == 0:
-            raise ValueError(f"File is empty: {file_path}")
-        
-        if file_size > 100 * 1024 * 1024:  # 100MB limit
-            if self.enhanced_logger:
-                self.enhanced_logger.marker_warning(f"Large file detected ({file_size / 1024 / 1024:.1f}MB)", file_path.name)
-            else:
-                self.logger.warning(f"Large file detected ({file_size / 1024 / 1024:.1f}MB): {file_path}")
-        
-        # Start processing with enhanced logging
         start_time = time.time()
         
-        if self.enhanced_logger:
-            self.enhanced_logger.marker_processing_start(file_path.name)
-            self.enhanced_logger.marker_processing_stage("CLI Processing", file_path.name, f"Size: {file_size / 1024 / 1024:.1f}MB")
-        else:
-            self.logger.debug(f"Starting Marker CLI processing for: {file_path}")
-        
-        try:
-            # Create temporary directory for output
-            with tempfile.TemporaryDirectory() as temp_dir:
-                temp_output_dir = Path(temp_dir) / "marker_output"
-                temp_output_dir.mkdir(exist_ok=True)
-                
-                # Run marker CLI command
+        # Create isolated temporary directory for this processing
+        with tempfile.TemporaryDirectory(prefix="marker_cli_") as temp_dir:
+            temp_dir = Path(temp_dir)
+            output_dir = temp_dir / "output"
+            output_dir.mkdir(exist_ok=True)
+            
+            # Copy input file to temp directory to avoid path issues
+            temp_input = temp_dir / file_path.name
+            shutil.copy2(file_path, temp_input)
+            
+            try:
+                # Build CLI command with complete isolation
                 cmd = [
                     "marker",
                     "--output_format", "markdown",
-                    "--disable_image_extraction",  # Disable images to avoid complexity
+                    "--disable_image_extraction",
                     "--workers", "1",
-                    "--output_dir", str(temp_output_dir),
-                    str(file_path)
+                    "--output_dir", str(output_dir),
+                    str(temp_input)
                 ]
                 
                 if self.enhanced_logger:
-                    self.enhanced_logger.marker_processing_stage("CLI Command", file_path.name, f"Running: {' '.join(cmd)}")
+                    self.enhanced_logger.processing_start(f"Running CLI: {' '.join(cmd)}")
                 
-                # Execute marker CLI
+                # Run in completely isolated environment
+                env = os.environ.copy()
+                
+                # Add environment variables to prevent multiprocessing issues
+                env.update({
+                    # Disable multiprocessing completely
+                    'MARKER_MAX_WORKERS': '1',
+                    'MARKER_PARALLEL_FACTOR': '1',
+                    'MARKER_DISABLE_MULTIPROCESSING': '1',
+                    'MARKER_SINGLE_THREADED': '1',
+                    
+                    # Disable GPU usage to avoid memory issues
+                    'CUDA_VISIBLE_DEVICES': '',
+                    'TORCH_DEVICE': 'cpu',
+                    
+                    # Disable model caching
+                    'MARKER_DISABLE_MODEL_CACHE': '1',
+                    'TRANSFORMERS_OFFLINE': '1',
+                    
+                    # Reduce memory usage
+                    'PYTORCH_CUDA_ALLOC_CONF': 'max_split_size_mb:128',
+                    'TORCH_CPP_LOG_LEVEL': 'ERROR',
+                    
+                    # Disable progress bars and verbose output
+                    'MARKER_DISABLE_TQDM': '1',
+                    'MARKER_QUIET': '1',
+                    
+                    # Force cleanup
+                    'MARKER_CLEANUP_ON_EXIT': '1'
+                })
+                
+                # Run the command in a separate process with timeout
                 result = subprocess.run(
                     cmd,
+                    env=env,
                     capture_output=True,
                     text=True,
-                    timeout=300,  # 5 minute timeout
-                    cwd=file_path.parent
+                    timeout=600,  # 10 minute timeout
+                    cwd=temp_dir  # Run in temp directory
                 )
                 
                 if result.returncode != 0:
                     error_msg = f"Marker CLI failed with return code {result.returncode}"
                     if result.stderr:
-                        error_msg += f"\nStderr: {result.stderr}"
+                        error_msg += f"\nSTDERR: {result.stderr}"
                     if result.stdout:
-                        error_msg += f"\nStdout: {result.stdout}"
-                    
+                        error_msg += f"\nSTDOUT: {result.stdout}"
                     raise RuntimeError(error_msg)
                 
-                # Find the output file
-                output_files = list(temp_output_dir.glob("*.md"))
-                if not output_files:
-                    raise RuntimeError(f"No output file generated for {file_path.name}")
+                # Find the output markdown file
+                markdown_files = list(output_dir.glob("*.md"))
+                if not markdown_files:
+                    raise RuntimeError(f"No markdown output found in {output_dir}")
                 
-                output_file = output_files[0]
-                
-                # Read the processed text
+                # Read the output
+                output_file = markdown_files[0]
                 with open(output_file, 'r', encoding='utf-8') as f:
                     text = f.read()
                 
                 processing_time = time.time() - start_time
                 
                 if self.enhanced_logger:
-                    self.enhanced_logger.marker_processing_complete(file_path.name, processing_time, pages=0)
-                    self.enhanced_logger.marker_performance("CLI Processing", file_path.name, 
-                                                           duration=processing_time, 
-                                                           file_size_mb=file_size / 1024 / 1024,
-                                                           text_length=len(text))
+                    self.enhanced_logger.processing_complete(
+                        f"Processing {file_path.name}", 
+                        processing_time,
+                        f"Generated {len(text)} characters"
+                    )
                 else:
-                    self.logger.info(f"Marker CLI processing completed for: {file_path} in {processing_time:.2f}s")
+                    self.logger.info(f"Processed {file_path.name} in {processing_time:.2f}s")
                 
-                # Return result in expected format
-                return {
-                    "text": text,
-                    "format": "markdown",
-                    "images": {},  # No images since we disabled extraction
-                    "processing_time": processing_time,
-                    "file_size": file_size,
-                    "output_file": str(output_file)
-                }
+                # Return text, format, and empty images list (since we disable image extraction)
+                return text, "markdown", []
                 
-        except subprocess.TimeoutExpired:
-            error_msg = f"Marker CLI processing timed out for {file_path.name}"
-            if self.enhanced_logger:
-                self.enhanced_logger.marker_error(error_msg, file_path.name)
-            else:
-                self.logger.error(error_msg)
-            raise RuntimeError(error_msg)
-            
-        except Exception as e:
-            if self.enhanced_logger:
-                self.enhanced_logger.marker_error(f"CLI processing failed", file_path.name, e)
-            else:
-                self.logger.error(f"Marker CLI processing failed for {file_path}: {type(e).__name__}: {str(e)}")
-            raise RuntimeError(f"Document processing failed: {str(e)}") from e
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(f"Marker CLI timed out after 10 minutes")
+            except Exception as e:
+                if self.enhanced_logger:
+                    self.enhanced_logger.error_clean(f"Failed to process {file_path.name}", e)
+                raise RuntimeError(f"Failed to process document: {e}")
+        
+        # Temporary directory is automatically cleaned up here
     
     def extract_text_from_rendered(self, rendered: Dict[str, Any]) -> Tuple[str, str, Dict[str, Any]]:
-        """Extract text from CLI processing result"""
-        try:
-            text = rendered.get("text", "")
-            format_type = rendered.get("format", "markdown")
-            images = rendered.get("images", {})
-            
-            if self.enhanced_logger:
-                self.enhanced_logger.marker_processing_stage("Text Extraction", "CLI result", f"{len(text)} chars")
-                self.enhanced_logger.marker_image_extraction("CLI result", len(images))
-            else:
-                self.logger.info(f"Extracted: {len(text)} chars, {len(images)} images")
-            
-            return text, format_type, images
-            
-        except Exception as e:
-            if self.enhanced_logger:
-                self.enhanced_logger.marker_warning(f"Text extraction failed, using fallback: {e}")
-            else:
-                self.logger.warning(f"Text extraction failed, using fallback: {e}")
-            return self._fallback_extraction(rendered)
+        """Extract text from CLI processing result - for backward compatibility"""
+        # This method is kept for backward compatibility but not used in CLI approach
+        if isinstance(rendered, tuple):
+            # New format: (text, format_type, images)
+            text, format_type, images = rendered
+            return text, format_type, {}
+        else:
+            # Old format: dictionary (shouldn't happen with CLI approach)
+            return rendered.get("text", ""), rendered.get("format", "markdown"), {}
     
     def _fallback_extraction(self, rendered: Dict[str, Any]) -> Tuple[str, str, Dict[str, Any]]:
         """Fallback extraction if normal extraction fails"""
@@ -224,32 +225,33 @@ def get_global_marker_models():
 
 # Maintain backward compatibility
 class MockRenderedObject:
-    """Mock object to maintain compatibility with existing code"""
+    """Mock object to maintain backward compatibility with existing code"""
     
-    def __init__(self, text: str, format_type: str = "markdown", images: Dict[str, Any] = None):
+    def __init__(self, text: str, format_type: str, images: list):
         self.text = text
         self.format_type = format_type
-        self.images = images or {}
-        self.markdown = text if format_type == "markdown" else text
-        self.html = text if format_type == "html" else text
-        self.page_count = 0  # We don't track page count in CLI mode
-        self.metadata = {}
+        self.images = images or []
     
-    def __getattr__(self, name):
-        # Return empty values for any other attributes
-        if name in ['page_count', 'metadata']:
-            return 0 if name == 'page_count' else {}
-        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+    def __str__(self):
+        return self.text
+    
+    def __repr__(self):
+        return f"MockRenderedObject(text_length={len(self.text)}, format={self.format_type})"
 
 
-def process_document_with_cli(file_path: Union[str, Path]) -> MockRenderedObject:
-    """Process document using CLI and return mock rendered object for compatibility"""
+def process_document_with_marker(file_path: Union[str, Path]) -> 'MockRenderedObject':
+    """
+    Process a document using the CLI-based Marker processor
+    
+    This function maintains backward compatibility with the old interface
+    while using the new CLI-based implementation internally.
+    """
     processor = MarkerProcessor()
     result = processor.process_document(file_path)
     
     # Create mock rendered object for compatibility
     return MockRenderedObject(
-        text=result["text"],
-        format_type=result["format"],
-        images=result["images"]
+        text=result[0],      # text_content
+        format_type=result[1], # format_type
+        images=result[2]     # images
     )

@@ -204,17 +204,25 @@ class DocumentProcessor:
             # Process document with Marker CLI
             result = self.marker_processor.process_document(file_path)
             
-            # Extract text from CLI result
-            text, ext, images = self.marker_processor.extract_text_from_rendered(result)
+            # Result is now a tuple: (text, format_type, images)
+            if isinstance(result, tuple) and len(result) == 3:
+                text, ext, images = result
+            else:
+                # Fallback for unexpected format
+                text, ext, images = self.marker_processor.extract_text_from_rendered(result)
             
             if self.enhanced_logger:
-                self.enhanced_logger.marker_processing_stage("Text Extraction Complete", file_path.name, f"{len(text)} chars, {len(images)} images")
+                self.enhanced_logger.processing_complete(
+                    f"Text extraction for {file_path.name}",
+                    0,  # No specific timing for this step
+                    f"{len(text)} chars, {len(images)} images"
+                )
             else:
                 self.logger.info(f"Extracted: {len(text)} chars, {len(images)} images")
             
         except Exception as e:
             if self.enhanced_logger:
-                self.enhanced_logger.marker_error(f"CLI processing failed", file_path.name, e)
+                self.enhanced_logger.error_clean(f"CLI processing failed for {file_path.name}", e)
             else:
                 self.logger.error(f"Marker CLI processing failed for {file_path.name}: {e}")
             raise e
@@ -251,7 +259,7 @@ class DocumentProcessor:
             "metadata": {
                 "processing_method": "marker_cli",
                 "format": ext,
-                "file_size": result.get("file_size", 0)
+                "file_size": file_path.stat().st_size  # Get file size from file path
             }
         }
         

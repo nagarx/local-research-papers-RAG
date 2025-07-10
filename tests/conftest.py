@@ -147,10 +147,11 @@ def test_config():
 
 @pytest.fixture(scope="session")
 def preload_models():
-    """Pre-load Marker models to avoid timing issues"""
+    """Pre-load Marker models to avoid timing issues - CLI approach doesn't need this"""
     try:
-        models = get_global_marker_models()
-        return models is not None
+        # CLI approach doesn't need model preloading
+        # Just return True to indicate models are "available"
+        return True
     except Exception as e:
         print(f"Warning: Could not preload models: {e}")
         return False

@@ -94,24 +94,30 @@ def test_ollama_connection():
         return False
 
 def test_marker_functionality():
-    """Test marker-pdf functionality"""
-    print("\n📄 Testing marker-pdf functionality...")
+    """Test marker CLI functionality"""
+    print("\n📄 Testing marker CLI functionality...")
     
     try:
-        from marker.models import create_model_dict
-        from marker.converters.pdf import PdfConverter
+        # Test marker CLI availability
+        result = subprocess.run(
+            ["marker", "--help"], 
+            capture_output=True, 
+            text=True, 
+            timeout=10
+        )
         
-        print("   ✅ Marker imports successful")
+        if result.returncode == 0:
+            print("   ✅ Marker CLI is available")
+            return True
+        else:
+            print("   ❌ Marker CLI not working")
+            return False
         
-        # Try to create models
-        print("   🔄 Creating marker models...")
-        models = create_model_dict()
-        print("   ✅ Marker models created successfully")
-        
-        return True
-        
+    except FileNotFoundError:
+        print("   ❌ Marker CLI not found")
+        return False
     except Exception as e:
-        print(f"   ❌ Marker test failed: {e}")
+        print(f"   ❌ Marker CLI test failed: {e}")
         return False
 
 def test_vector_database():

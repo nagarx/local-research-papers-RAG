@@ -328,16 +328,25 @@ class InstallationVerifier:
             all_passed = False
         
         try:
-            # Test marker-pdf functionality
-            from marker.models import create_model_dict
-            from marker.converters.pdf import PdfConverter
+            # Test marker CLI functionality instead of Python library
+            result = subprocess.run(
+                ["marker", "--help"], 
+                capture_output=True, 
+                text=True, 
+                timeout=10
+            )
             
-            # Try to create marker models (this validates installation)
-            models = create_model_dict()
-            self.log_result("Marker Models", True, "Can create marker models")
+            if result.returncode == 0:
+                self.log_result("Marker CLI", True, "Marker CLI is available")
+            else:
+                self.log_result("Marker CLI", False, "Marker CLI not working")
+                all_passed = False
             
+        except FileNotFoundError:
+            self.log_result("Marker CLI", False, "Marker CLI not found")
+            all_passed = False
         except Exception as e:
-            self.log_result("Marker Models", False, f"Error: {e}")
+            self.log_result("Marker CLI", False, f"Error: {e}")
             all_passed = False
         
         return all_passed
