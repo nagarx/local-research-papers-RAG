@@ -194,40 +194,29 @@ class DocumentProcessor:
             content_hash, file_path.name
         )
         
-        # Process with Marker
+        # Process with Marker CLI
         if self.enhanced_logger:
             self.enhanced_logger.marker_processing_start(file_path.name)
-            self.enhanced_logger.marker_cleanup("Pre-processing cleanup")
         else:
-            self.logger.debug(f"Starting Marker processing for: {file_path.name}")
-        
-        self._cleanup_resources()  # Clean up before processing
+            self.logger.debug(f"Starting Marker CLI processing for: {file_path.name}")
         
         try:
-            # Process document with Marker
-            rendered = self.marker_processor.process_document(file_path)
+            # Process document with Marker CLI
+            result = self.marker_processor.process_document(file_path)
             
-            # Extract text
-            text, ext, images = self.marker_processor.extract_text_from_rendered(rendered)
+            # Extract text from CLI result
+            text, ext, images = self.marker_processor.extract_text_from_rendered(result)
             
             if self.enhanced_logger:
                 self.enhanced_logger.marker_processing_stage("Text Extraction Complete", file_path.name, f"{len(text)} chars, {len(images)} images")
-                self.enhanced_logger.marker_cleanup("Post-processing cleanup")
             else:
                 self.logger.info(f"Extracted: {len(text)} chars, {len(images)} images")
             
-            # Clean up after processing
-            self._cleanup_resources()
-            
         except Exception as e:
-            # Aggressive cleanup on error
             if self.enhanced_logger:
-                self.enhanced_logger.marker_error(f"Processing failed", file_path.name, e)
-                self.enhanced_logger.marker_cleanup("Error cleanup")
+                self.enhanced_logger.marker_error(f"CLI processing failed", file_path.name, e)
             else:
-                self.logger.error(f"Marker processing failed for {file_path.name}: {e}")
-            
-            self._cleanup_resources()
+                self.logger.error(f"Marker CLI processing failed for {file_path.name}: {e}")
             raise e
         
         # Save raw extracted text
@@ -238,7 +227,10 @@ class DocumentProcessor:
         processing_time = time.time() - start_time
         
         # Create text chunks for RAG
-        chunks = self.text_chunker.create_chunks(text, file_path.name, document_id, rendered)
+        # Create a mock rendered object for compatibility with text chunker
+        from .marker_integration import MockRenderedObject
+        mock_rendered = MockRenderedObject(text, ext, images)
+        chunks = self.text_chunker.create_chunks(text, file_path.name, document_id, mock_rendered)
         
         processed_doc = {
             "id": document_id,
@@ -252,19 +244,20 @@ class DocumentProcessor:
             "content": {
                 "full_text": text,
                 "blocks": chunks,
-                "page_count": getattr(rendered, 'page_count', 0) if hasattr(rendered, 'page_count') else 0,
+                "page_count": 0,  # CLI doesn't track page count
                 "total_blocks": len(chunks),
                 "images": images
             },
-            "metadata": rendered.metadata if hasattr(rendered, 'metadata') else {}
+            "metadata": {
+                "processing_method": "marker_cli",
+                "format": ext,
+                "file_size": result.get("file_size", 0)
+            }
         }
         
         # Update statistics
         self._processing_stats["total_processed"] += 1
         self._processing_stats["processing_time"] += processing_time
-        
-        # Clear GPU cache
-        self._clear_gpu_cache()
         
         if self.enhanced_logger:
             self.enhanced_logger.document_complete(
@@ -280,21 +273,14 @@ class DocumentProcessor:
         return processed_doc
     
     def _cleanup_resources(self):
-        """Clean up system resources"""
-        try:
-            from ..utils.resource_cleanup import cleanup_multiprocessing_resources, cleanup_semaphore_leaks
-            cleanup_multiprocessing_resources()
-            cleanup_semaphore_leaks()
-        except ImportError:
-            pass
+        """Clean up system resources - no longer needed with CLI approach"""
+        # CLI approach doesn't require resource cleanup
+        pass
     
     def _clear_gpu_cache(self):
-        """Clear GPU cache"""
-        try:
-            from ..utils.torch_utils import clear_gpu_cache
-            clear_gpu_cache()
-        except ImportError:
-            self.logger.warning("Cannot clear GPU cache - torch_utils not available")
+        """Clear GPU cache - no longer needed with CLI approach"""
+        # CLI approach doesn't use GPU directly
+        pass
     
     async def batch_process_documents(
         self, 
@@ -322,27 +308,17 @@ class DocumentProcessor:
                         result = await self.process_document_async(file_path)
                         batch_results.append(result)
                         
-                        # Clean up resources after each document
-                        self._cleanup_resources()
-                        
                     except Exception as e:
                         self.logger.error(f"Failed to process {file_path}: {e}")
-                        self._cleanup_resources()
                         continue
                 
                 results.extend(batch_results)
-                
-                # Enhanced cleanup between batches
-                self._clear_gpu_cache()
-                self._cleanup_resources()
                 
                 # Small delay between batches
                 await asyncio.sleep(0.1)
                 
             except Exception as e:
                 self.logger.error(f"Batch {batch_num} processing failed: {e}")
-                self._clear_gpu_cache()
-                self._cleanup_resources()
                 continue
         
         return results
